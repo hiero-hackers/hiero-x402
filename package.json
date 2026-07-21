@@ -1,14 +1,47 @@
 {
   "name": "@hiero-hackers/hiero-x402",
   "version": "0.0.1",
-  "private": true,
   "description": "x402 on Hiero with verifiable settlement and receipts. The official @x402 packages move the money; this repo proves it moved — an independent, facilitator-free settlement check and a receipt artifact for every payment an agent makes. Prototype.",
   "type": "module",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hiero-hackers/hiero-x402.git"
+  },
+  "bugs": "https://github.com/hiero-hackers/hiero-x402/issues",
+  "homepage": "https://github.com/hiero-hackers/hiero-x402#readme",
   "engines": {
     "node": ">=20.0.0"
   },
+  "sideEffects": false,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "keywords": [
+    "hedera",
+    "hiero",
+    "x402",
+    "payments",
+    "receipts",
+    "micropayments"
+  ],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
