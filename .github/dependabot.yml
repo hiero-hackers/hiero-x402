@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+    ignore:
+      # TypeScript majors are toolchain events, not routine bumps: the 7.x
+      # native compiler drops the JS API typescript-eslint loads, so the
+      # major is adopted deliberately once the toolchain supports it.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # The x402 stack is pinned EXACTLY (2.19.0) on purpose — scheme and
+      # facilitator behavior must move deliberately, not on a schedule.
+      - dependency-name: "@x402/*"

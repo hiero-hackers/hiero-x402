@@ -1,0 +1,55 @@
+{
+  "name": "@hiero-hackers/hiero-x402",
+  "version": "0.0.1",
+  "private": true,
+  "description": "x402 on Hiero with verifiable settlement and receipts. The official @x402 packages move the money; this repo proves it moved — an independent, facilitator-free settlement check and a receipt artifact for every payment an agent makes. Prototype.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src demo test",
+    "lint:fix": "eslint src demo test --fix",
+    "format": "prettier --write src demo test *.md research/*.md *.js *.ts",
+    "format:check": "prettier --check src demo test *.md research/*.md *.js *.ts",
+    "verify": "npm run typecheck && npm run lint && npm run format:check && npm run test:coverage",
+    "demo": "tsx --env-file=.env demo/up.ts",
+    "facilitator": "tsx --env-file=.env demo/facilitator.ts",
+    "server": "tsx --env-file=.env demo/server.ts",
+    "e2e": "tsx --env-file=.env demo/agent.ts",
+    "screenshots": "node scripts/screenshots.mjs",
+    "provenance": "tsx demo/provenance.ts"
+  },
+  "dependencies": {
+    "@hiero-hackers/hiero-payment-requests": "^0.1.3",
+    "@hiero-hackers/hiero-receipts": "^0.2.2",
+    "@hiero-hackers/streams-node": "^0.2.0",
+    "@hiero-ledger/sdk": "2.85.0",
+    "@hono/node-server": "^1.13.0",
+    "@x402/core": "2.19.0",
+    "@x402/fetch": "2.19.0",
+    "@x402/hedera": "2.19.0",
+    "@x402/hono": "2.19.0",
+    "@x402/paywall": "2.19.0",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^10.7.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.6",
+    "eslint-plugin-security": "^4.0.1",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.5",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.64.0",
+    "vitest": "^4.0.0"
+  }
+}
