@@ -56,13 +56,15 @@ export async function resolvePrivateKey(
     process.exit(1);
   }
 
-  const host = MIRROR_HOSTS[demoNetwork()];
+  const network = demoNetwork();
+  const host = MIRROR_HOSTS[network];
   try {
     const response = await fetch(`${host}/api/v1/accounts/${encodeURIComponent(accountId)}`);
     if (!response.ok) throw new Error(`mirror answered ${response.status}`);
     const body = (await response.json()) as { key?: { key?: string } };
     const onChain = body.key?.key?.toLowerCase();
-    if (onChain === undefined) throw new Error("account has no single key on the mirror");
+    if (onChain === undefined)
+      throw new Error(`${accountId} has no single ECDSA/ED25519 key on the mirror`);
     const match = candidates.find((c) => c.publicKey.toStringRaw().toLowerCase() === onChain);
     if (match === undefined) {
       console.error(
@@ -71,12 +73,27 @@ export async function resolvePrivateKey(
       );
       process.exit(1);
     }
+    console.log(`[demo] key ✓ confirmed against ${accountId} on the ${network} mirror`);
     return match;
   } catch (error) {
-    // Mirror unreachable: proceed with the first parse, but say so.
+    const reason = error instanceof Error ? error.message : String(error);
+    // Couldn't confirm the curve against the chain. If the key parsed only ONE
+    // way, that lone reading is safe. If it parsed as MORE THAN ONE curve,
+    // guessing is exactly what surfaces later as a baffling INVALID_SIGNATURE
+    // at precheck — so refuse, and say how to fix it (the maintainer hit this
+    // adding fresh keys; a first-time user must see the cause, not the symptom).
+    if (candidates.length > 1) {
+      console.error(
+        `[demo] could not confirm which key ${accountId} uses (${reason}), and the key is ` +
+          `curve-ambiguous — it parses as more than one curve. Guessing risks a silent ` +
+          `INVALID_SIGNATURE at settle. Paste the DER-encoded key from the Portal (unambiguous), ` +
+          `or retry when the mirror is reachable.`,
+      );
+      process.exit(1);
+    }
     console.warn(
-      `[demo] could not confirm the key against ${accountId} on the mirror ` +
-        `(${error instanceof Error ? error.message : String(error)}) — proceeding unverified`,
+      `[demo] could not confirm the key against ${accountId} (${reason}) — it parsed one way ` +
+        `only, so proceeding with it.`,
     );
     return candidates[0]!;
   }

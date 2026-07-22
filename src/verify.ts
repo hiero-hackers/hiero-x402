@@ -29,7 +29,7 @@ import { receiptFor } from "@hiero-hackers/hiero-receipts";
 import type { Receipt } from "@hiero-hackers/hiero-receipts";
 import { fromMirror } from "@hiero-hackers/hiero-receipts/mirror";
 import type { PaymentRequirements } from "@x402/core/types";
-import { HASHSCAN_HOSTS, assertSupportedNetwork } from "./config.js";
+import { HASHSCAN_HOSTS, MIRROR_HOSTS, assertSupportedNetwork } from "./config.js";
 import { restTransactionId, transactionsById } from "./mirror.js";
 import { fromPaymentRequirements } from "./requirements.js";
 
@@ -45,6 +45,11 @@ export interface SettlementVerdict {
   readonly transactionId: string;
   /** Human-checkable proof link. Present once the mirror knows the transaction. */
   readonly hashscanUrl?: string;
+  /** The raw mirror-node REST record this verdict was read from — the
+   *  operator's own output, linkable so a reader can re-derive the verdict
+   *  themselves. Present on the mirror path once the mirror knows the
+   *  transaction; absent on the block-proof path (no mirror is consulted). */
+  readonly mirrorUrl?: string;
 }
 
 export interface VerifyOptions {
@@ -91,7 +96,7 @@ export async function verifySettlement(
 
   // `network` is the gate's narrowed literal union, not attacker-chosen.
   // eslint-disable-next-line security/detect-object-injection
-  return toVerdict(request, entries, transactionId, HASHSCAN_HOSTS[network]);
+  return toVerdict(request, entries, transactionId, HASHSCAN_HOSTS[network], MIRROR_HOSTS[network]);
 }
 
 /** One receipt + its payment view — what both sources produce per row. */
@@ -111,6 +116,7 @@ export function toVerdict(
   entries: readonly VerdictEntry[],
   transactionId: string,
   hashscanBase: string | undefined,
+  mirrorHost?: string,
 ): SettlementVerdict {
   const fulfilment = match(
     request,
@@ -128,13 +134,17 @@ export function toVerdict(
     .map((entry) => entry.receipt);
 
   const consensusTimestamp = entries[0]?.payment.consensusTimestamp;
+  const rest = restTransactionId(transactionId);
   return {
     fulfilment,
     request,
     receipts,
-    transactionId: restTransactionId(transactionId),
+    transactionId: rest,
     ...(consensusTimestamp !== undefined && hashscanBase !== undefined
       ? { hashscanUrl: `${hashscanBase}/transaction/${consensusTimestamp}` }
+      : {}),
+    ...(consensusTimestamp !== undefined && mirrorHost !== undefined
+      ? { mirrorUrl: `${mirrorHost}/api/v1/transactions/${rest}` }
       : {}),
   };
 }

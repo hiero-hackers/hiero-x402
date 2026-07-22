@@ -130,7 +130,9 @@ describe("the demo hub (/ui)", () => {
     expect(html).toContain("/data/spot-price");
     expect(html).toContain("pay as a human");
     expect(html).toContain("hiero-checkout");
-    expect(html).toContain("Receipts (from real runs)");
+    expect(html).toContain("Receipts — the proof you keep");
+    expect(html).toContain("Mirror receipt"); // the two rungs, clearly split
+    expect(html).toContain("Block proof");
   });
 
   it("receipt routes 404 honestly for unknown names", async () => {

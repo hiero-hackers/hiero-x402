@@ -144,10 +144,21 @@ export function createApp(options: AppOptions): Hono {
         <td style="text-align:right"><a class="pay" href="${esc(link)}">pay as a human ↗</a></td>
       </tr>`;
     }).join("");
-    const receiptLink = (file: string, label: string): string =>
-      existsSync(file)
-        ? `<li><a href="/receipts/${esc(file.replace(".html", ""))}">${esc(label)}</a></li>`
-        : `<li style="color:#888">${esc(label)} — none yet (run the demo)</li>`;
+    // Receipts are the project's USP, so each is a card, not a list item — a
+    // clear split between the two rungs of the trust ladder (block-proof =
+    // "verified"; mirror = an independent "mirror receipt", never "verified").
+    const receiptCard = (
+      file: string,
+      kind: "verified" | "mirror",
+      tag: string,
+      title: string,
+      desc: string,
+    ): string => {
+      const inner = `<span class="tag">${tag}</span><h3>${title}</h3><p>${desc}</p>`;
+      return existsSync(file)
+        ? `<a class="rcard ${kind}" href="/receipts/${file.replace(".html", "")}">${inner}<span class="open">Open receipt →</span></a>`
+        : `<div class="rcard ${kind} empty">${inner}<span class="open">none yet — run the demo</span></div>`;
+    };
     return c.html(`<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -158,7 +169,7 @@ export function createApp(options: AppOptions): Hono {
   :root{
     --ink:#0b0a10;--panel:#151220;--panel-2:#100e19;--line:#272235;--line-2:#332c46;
     --text:#eceaf4;--muted:#9d97ae;--faint:#6c657d;
-    --brand:#8071ff;--brand-soft:#b7adff;--proof:#3dd4a0;--gold:#e6b968;
+    --brand:#8071ff;--brand-soft:#b7adff;--proof:#3dd4a0;--gold:#e6b968;--steel:#9aa3b7;
     --warn:#f3b64d;--danger:#f4746b;
     --radius:18px;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
     --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
@@ -233,9 +244,22 @@ export function createApp(options: AppOptions): Hono {
   .pay{display:inline-flex;align-items:center;gap:.35rem;padding:.28rem .62rem;border:1px solid var(--line-2);
     border-radius:7px;font-size:.78rem;font-weight:600;color:var(--brand-soft);background:rgba(128,113,255,.08);transition:.2s}
   .pay:hover{border-color:rgba(128,113,255,.5);text-decoration:none;color:#fff}
-  .list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:.65rem}
-  .list li{display:flex;gap:.6rem;align-items:baseline;font-size:.92rem}
-  .list li::before{content:"›";color:var(--brand-soft);font-weight:700}
+  /* receipts — the USP, given the most prominent treatment on the page */
+  .receipts{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+  .rcard{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:14px;
+    padding:1.15rem 1.25rem;background:var(--panel-2);transition:.2s}
+  a.rcard:hover{border-color:var(--line-2);text-decoration:none;transform:translateY(-2px);
+    box-shadow:0 16px 34px -24px rgba(0,0,0,.9)}
+  .rcard .tag{align-self:flex-start;font-family:var(--mono);font-size:.64rem;font-weight:700;
+    letter-spacing:.1em;text-transform:uppercase;padding:.24rem .55rem;border-radius:6px;border:1px solid}
+  .rcard.verified .tag{color:var(--gold);border-color:rgba(230,185,104,.42);background:rgba(230,185,104,.1)}
+  .rcard.mirror .tag{color:var(--steel);border-color:rgba(154,163,183,.42);background:rgba(154,163,183,.1)}
+  .rcard h3{margin:.8rem 0 .3rem;font-family:var(--serif);font-weight:600;font-size:1.12rem;color:#fbfbfe}
+  .rcard p{margin:0;color:var(--muted);font-size:.86rem;flex:1}
+  .rcard .open{margin-top:.85rem;font-weight:600;font-size:.85rem;color:var(--brand-soft)}
+  .rcard.empty{opacity:.55}
+  .rcard.empty .open{color:var(--faint)}
+  @media(max-width:600px){.receipts{grid-template-columns:1fr}}
   footer{margin-top:2.75rem;padding-top:1.35rem;border-top:1px solid var(--line);
     display:flex;flex-wrap:wrap;gap:.5rem 1rem;justify-content:space-between;color:var(--faint);font-size:.8rem}
   @media(max-width:560px){.arrow{display:none}}
@@ -277,20 +301,33 @@ export function createApp(options: AppOptions): Hono {
     </section>
 
     <section class="card">
+      <h2>Receipts — the proof you keep</h2>
+      <p class="sub">This is the point of the project: every run ends in a receipt anyone can re-check — settlement you don't have to take on trust. Two rungs of the same ladder.</p>
+      <div class="receipts">
+        ${receiptCard(
+          "receipt.html",
+          "mirror",
+          "Mirror receipt",
+          "Mirror receipt",
+          "The public mirror node's attested record of the settlement — independent of the facilitator, and re-checkable by anyone. Links straight to the raw mirror-node JSON.",
+        )}
+        ${receiptCard(
+          "verified-receipt.html",
+          "verified",
+          "Block proof",
+          "Verified settlement",
+          "The ledger's own block proof — recomputed and checked before a single field is believed. Cryptography, not attestation: the only receipt we call verified.",
+        )}
+      </div>
+    </section>
+
+    <section class="card">
       <h2>Catalog — one price, two rails</h2>
       <p class="sub">Agents <code>GET</code> any path → 402 challenge → pay → data. Humans scan the same terms via checkout.</p>
       <table>
         <thead><tr><th>Path</th><th>Product</th><th style="text-align:right">Price</th><th style="text-align:right">Checkout</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-    </section>
-
-    <section class="card">
-      <h2>Receipts (from real runs)</h2>
-      <ul class="list">
-        ${receiptLink("receipt.html", "latest settlement — verified against the mirror")}
-        ${receiptLink("verified-receipt.html", "block-proof settlement — cryptographically verified")}
-      </ul>
     </section>
 
     <section class="card">
