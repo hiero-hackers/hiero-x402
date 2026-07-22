@@ -140,62 +140,173 @@ export function createApp(options: AppOptions): Hono {
       return `<tr>
         <td><code>${esc(product.path)}</code></td>
         <td>${esc(product.label)}</td>
-        <td style="text-align:right"><code>${esc(price)}</code></td>
-        <td><a href="${esc(link)}">pay as a human</a></td>
+        <td style="text-align:right"><span class="price">${esc(price)}</span></td>
+        <td style="text-align:right"><a class="pay" href="${esc(link)}">pay as a human ↗</a></td>
       </tr>`;
     }).join("");
     const receiptLink = (file: string, label: string): string =>
       existsSync(file)
         ? `<li><a href="/receipts/${esc(file.replace(".html", ""))}">${esc(label)}</a></li>`
         : `<li style="color:#888">${esc(label)} — none yet (run the demo)</li>`;
-    return c.html(`<!doctype html><meta charset="utf-8">
+    return c.html(`<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>hiero-x402 demo</title>
-<div style="font-family:system-ui,sans-serif;max-width:36rem;margin:1.5rem auto;padding:0 1rem;display:flex;flex-direction:column;gap:1.25rem">
-  <header>
-    <h1 style="margin:0;font-size:1.3rem">hiero-x402 demo</h1>
-    <p style="margin:.3rem 0 0;color:#555">Mock market data behind HTTP&nbsp;402 on <code>${esc(network)}</code>.
-    Agents pay the 402; humans pay the same price via checkout; every settlement is
-    independently verified.</p>
+<title>hiero-x402 — settlement, independently verified</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box}
+  :root{
+    --ink:#0b0a10;--panel:#151220;--panel-2:#100e19;--line:#272235;--line-2:#332c46;
+    --text:#eceaf4;--muted:#9d97ae;--faint:#6c657d;
+    --brand:#8071ff;--brand-soft:#b7adff;--proof:#3dd4a0;--gold:#e6b968;
+    --warn:#f3b64d;--danger:#f4746b;
+    --radius:18px;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  html{color-scheme:dark}
+  body{margin:0;font-family:var(--sans);line-height:1.55;color:var(--text);
+    background:
+      radial-gradient(1100px 560px at 80% -14%,rgba(128,113,255,.15),transparent 58%),
+      radial-gradient(820px 480px at -6% 2%,rgba(61,212,160,.07),transparent 55%),
+      repeating-linear-gradient(115deg,rgba(255,255,255,.014) 0 1px,transparent 1px 8px),
+      var(--ink);
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  a{color:var(--proof);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.86em}
+  .wrap{max-width:60rem;margin:0 auto;padding:1.75rem 1.25rem 4rem}
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:2.5rem}
+  .brand{display:flex;align-items:center;gap:.65rem;font-weight:650;letter-spacing:-.01em}
+  .brand .mark{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-family:var(--mono);
+    background:linear-gradient(135deg,var(--brand),#5b8bff);color:#0a0c11;font-weight:800;font-size:.9rem;
+    box-shadow:0 0 0 1px rgba(230,185,104,.35),0 6px 18px -6px rgba(128,113,255,.7)}
+  .brand small{color:var(--faint);font-weight:400;font-size:.8rem;margin-left:.1rem}
+  .pill{display:inline-flex;align-items:center;gap:.45rem;padding:.34rem .72rem;border:1px solid var(--line-2);
+    border-radius:999px;font-size:.72rem;color:var(--muted);background:rgba(255,255,255,.02);font-family:var(--mono)}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:var(--proof);box-shadow:0 0 0 3px rgba(61,212,160,.18)}
+  .hero{margin:0 0 2.5rem;position:relative}
+  .hero .eyebrow{margin:0 0 .55rem;font-size:.7rem;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--faint)}
+  .hero h1{font-family:var(--serif);font-weight:600;margin:0 0 .7rem;font-size:clamp(2rem,5vw,3rem);
+    line-height:1.08;letter-spacing:-.01em;color:#fbfbfe;max-width:20ch}
+  .hero p{margin:0;max-width:44rem;color:var(--muted);font-size:1.04rem}
+  .grid{display:flex;flex-direction:column;gap:1.15rem}
+  .card{position:relative;overflow:hidden;background:linear-gradient(180deg,var(--panel),var(--panel-2));
+    border:1px solid var(--line);border-radius:var(--radius);padding:1.4rem 1.5rem;
+    box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 24px 48px -34px rgba(0,0,0,.9)}
+  .card h2{margin:0 0 .2rem;font-size:.7rem;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+  .card .sub{margin:.15rem 0 1.2rem;color:var(--muted);font-size:.92rem}
+  /* live-run stepper — pills the run lights cumulatively via .lit */
+  .rails{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center}
+  .rail{position:relative;padding:.36rem .72rem;border:1px solid var(--line-2);border-radius:8px;
+    background:rgba(255,255,255,.02);font-size:.74rem;color:var(--muted);font-family:var(--mono);transition:.3s}
+  .rail.lit{border-color:rgba(61,212,160,.55);color:#eafff6;
+    background:linear-gradient(180deg,rgba(61,212,160,.2),rgba(61,212,160,.07));
+    box-shadow:0 0 0 1px rgba(61,212,160,.3),0 8px 20px -10px rgba(61,212,160,.55)}
+  .arrow{color:var(--faint);font-size:.8rem}
+  .btn{margin-top:1.15rem;display:inline-flex;align-items:center;gap:.5rem;padding:.66rem 1.15rem;border:none;cursor:pointer;
+    border-radius:10px;font-size:.9rem;font-weight:600;font-family:inherit;color:#0a0c11;
+    background:linear-gradient(135deg,var(--brand),#5b8bff);box-shadow:0 10px 24px -10px rgba(128,113,255,.8);transition:.2s}
+  .btn:hover{transform:translateY(-1px);filter:brightness(1.07)}
+  .btn:disabled{opacity:.55;cursor:progress;transform:none;filter:none}
+  .note{color:var(--faint);font-size:.82rem;margin-top:1rem}
+  .status{display:none;align-items:center;gap:.55rem;margin-top:1.1rem;font-size:.82rem;color:var(--muted)}
+  .status.on{display:inline-flex}
+  .status .spin{width:13px;height:13px;border:2px solid rgba(128,113,255,.25);border-top-color:var(--brand);border-radius:50%;animation:spin .7s linear infinite}
+  .status.done{color:var(--proof)}
+  .status.err{color:var(--danger)}
+  .status.done .spin,.status.err .spin{display:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #run-log{margin:1rem 0 0;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);
+    padding:.9rem 1rem;border-radius:12px;font-family:var(--mono);font-size:.74rem;line-height:1.6;
+    max-height:19rem;overflow:auto;white-space:pre-wrap;word-break:break-word}
+  #run-log a{color:var(--brand-soft)}
+  #run-hint{font-size:.88rem;margin:.9rem 0 0;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:.9rem}
+  thead th{text-align:left;font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
+    font-weight:600;padding:0 .65rem .65rem;border-bottom:1px solid var(--line)}
+  tbody td{padding:.75rem .65rem;border-bottom:1px solid var(--line);vertical-align:middle}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:rgba(255,255,255,.02)}
+  td code{color:var(--brand-soft)}
+  td .price{font-family:var(--mono);color:var(--proof);font-size:.84rem}
+  .pay{display:inline-flex;align-items:center;gap:.35rem;padding:.28rem .62rem;border:1px solid var(--line-2);
+    border-radius:7px;font-size:.78rem;font-weight:600;color:var(--brand-soft);background:rgba(128,113,255,.08);transition:.2s}
+  .pay:hover{border-color:rgba(128,113,255,.5);text-decoration:none;color:#fff}
+  .list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:.65rem}
+  .list li{display:flex;gap:.6rem;align-items:baseline;font-size:.92rem}
+  .list li::before{content:"›";color:var(--brand-soft);font-weight:700}
+  footer{margin-top:2.75rem;padding-top:1.35rem;border-top:1px solid var(--line);
+    display:flex;flex-wrap:wrap;gap:.5rem 1rem;justify-content:space-between;color:var(--faint);font-size:.8rem}
+  @media(max-width:560px){.arrow{display:none}}
+</style>
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand"><span class="mark">x4</span>hiero-x402 <small>settlement, verified</small></div>
+    <span class="pill"><span class="dot"></span>network&nbsp;<code>${esc(network)}</code></span>
+  </div>
+
+  <header class="hero">
+    <p class="eyebrow">HTTP 402 · verifiable settlement on Hiero</p>
+    <h1>Settlement you don't have to trust.</h1>
+    <p>Mock market data behind HTTP&nbsp;402. Agents pay the 402 challenge; humans pay the
+    same price via checkout — and every settlement is independently verified against the
+    ledger, not the facilitator's word.</p>
   </header>
-  <section>
-    <h2 style="font-size:1rem;margin:0 0 .5rem">Live end-to-end — the agent rails</h2>
-    <div style="display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;font-size:.72rem">
-      <span data-rail="agent" style="padding:.15rem .5rem;border:1px solid #ccc;border-radius:999px;background:#fff">agent · client key</span><span style="color:#888">→</span>
-      <span data-rail="server" style="padding:.15rem .5rem;border:1px solid #ccc;border-radius:999px;background:#fff">server · no keys</span><span style="color:#888">→</span>
-      <span data-rail="facilitator" style="padding:.15rem .5rem;border:1px solid #ccc;border-radius:999px;background:#fff">facilitator · fee-payer key</span><span style="color:#888">→</span>
-      <span data-rail="chain" style="padding:.15rem .5rem;border:1px solid #ccc;border-radius:999px;background:#fff">Hedera testnet</span><span style="color:#888">→</span>
-      <span data-rail="mirror" style="padding:.15rem .5rem;border:1px solid #ccc;border-radius:999px;background:#fff">mirror verify</span><span style="color:#888">→</span>
-      <span data-rail="hcs" style="padding:.15rem .5rem;border:1px solid #ccc;border-radius:999px;background:#fff">HCS attest</span>
-    </div>
-    ${
-      options.runAgent !== undefined
-        ? `<button id="run-agent" style="margin:.6rem 0 0;padding:.45rem .9rem;border:1px solid #99f;border-radius:8px;background:#eef;font-size:.85rem;cursor:pointer">▶ Run the agent — pays real testnet HBAR</button>`
-        : `<p style="color:#888;font-size:.8rem;margin:.6rem 0 0">Live runs are off here — start via <code>npm run demo</code> and use the hub it prints.</p>`
-    }
-    <pre id="run-log" style="display:none;margin:.6rem 0 0;background:#14161a;color:#d8dce2;padding:.75rem;border-radius:8px;font-size:.72rem;line-height:1.5;max-height:16rem;overflow:auto;white-space:pre-wrap"></pre>
-    <p id="run-hint" style="display:none;font-size:.85rem;margin:.5rem 0 0">Done — <a href="/receipts/receipt">open the fresh receipt</a> (the rails above show how far the run got).</p>
-  </section>
-  <section>
-    <h2 style="font-size:1rem;margin:0 0 .5rem">Catalog — one price, two rails</h2>
-    <table style="width:100%;border-collapse:collapse;font-size:.9rem">${rows}</table>
-    <p style="color:#555;font-size:.8rem;margin:.5rem 0 0">Agents: <code>GET</code> any path above → 402 challenge → pay → data.</p>
-  </section>
-  <section>
-    <h2 style="font-size:1rem;margin:0 0 .5rem">Receipts (from real runs)</h2>
-    <ul style="margin:0;padding-left:1.2rem">
-      ${receiptLink("receipt.html", "latest settlement — verified against the mirror")}
-      ${receiptLink("verified-receipt.html", "block-proof settlement — cryptographically verified")}
-    </ul>
-  </section>
-  <section>
-    <h2 style="font-size:1rem;margin:0 0 .5rem">Audit trail</h2>
-    <p style="margin:0;font-size:.9rem">${
-      topic !== "" && topic !== "create"
-        ? `Verdicts attested to HCS topic <a href="https://hashscan.io/testnet/topic/${esc(topic)}"><code>${esc(topic)}</code></a> — an append-only public log.`
-        : `Set <code>ATTEST_TOPIC_ID</code> to attest verdicts to a public HCS topic.`
-    }</p>
-  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Live end-to-end — the agent rails</h2>
+      <p class="sub">One click runs the agent as its own process; each stage lights up as the settlement advances.</p>
+      <div class="rails">
+        <span class="rail" data-rail="agent">agent · client key</span><span class="arrow">→</span>
+        <span class="rail" data-rail="server">server · no keys</span><span class="arrow">→</span>
+        <span class="rail" data-rail="facilitator">facilitator · fee-payer key</span><span class="arrow">→</span>
+        <span class="rail" data-rail="chain">Hedera testnet</span><span class="arrow">→</span>
+        <span class="rail" data-rail="mirror">mirror verify</span><span class="arrow">→</span>
+        <span class="rail" data-rail="hcs">HCS attest</span>
+      </div>
+      ${
+        options.runAgent !== undefined
+          ? `<button id="run-agent" class="btn">▶ Run the agent — pays real testnet HBAR</button>`
+          : `<p class="note">Live runs are off here — start via <code>npm run demo</code> and use the hub it prints.</p>`
+      }
+      <div id="run-status" class="status"><span class="spin"></span><span id="run-status-text">Running in the background…</span></div>
+      <pre id="run-log" style="display:none"></pre>
+      <p id="run-hint" style="display:none">Done — <a href="/receipts/receipt">open the fresh receipt</a> (the rails above show how far the run got).</p>
+    </section>
+
+    <section class="card">
+      <h2>Catalog — one price, two rails</h2>
+      <p class="sub">Agents <code>GET</code> any path → 402 challenge → pay → data. Humans scan the same terms via checkout.</p>
+      <table>
+        <thead><tr><th>Path</th><th>Product</th><th style="text-align:right">Price</th><th style="text-align:right">Checkout</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Receipts (from real runs)</h2>
+      <ul class="list">
+        ${receiptLink("receipt.html", "latest settlement — verified against the mirror")}
+        ${receiptLink("verified-receipt.html", "block-proof settlement — cryptographically verified")}
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Audit trail</h2>
+      <p style="margin:0;font-size:.92rem;color:var(--muted)">${
+        topic !== "" && topic !== "create"
+          ? `Verdicts attested to HCS topic <a href="https://hashscan.io/testnet/topic/${esc(topic)}"><code>${esc(topic)}</code></a> — an append-only public log.`
+          : `Set <code>ATTEST_TOPIC_ID</code> to attest verdicts to a public HCS topic.`
+      }</p>
+    </section>
+  </div>
+
+  <footer>
+    <span>hiero-x402 · x402 on Hiero with verifiable settlement</span>
+    <span>independent · facilitator-free verification</span>
+  </footer>
 </div>
 <script>
 (function () {
@@ -203,16 +314,22 @@ export function createApp(options: AppOptions): Hono {
   if (!button) return;
   var log = document.getElementById("run-log");
   var hint = document.getElementById("run-hint");
+  var status = document.getElementById("run-status");
+  var statusText = document.getElementById("run-status-text");
+  var label = button.textContent;
   // Agent step number → which rail lights up (demo/agent.ts numbers them).
   var STAGE = { 1: "server", 2: "server", 3: "agent", 4: "facilitator", 5: "chain", 6: "mirror", 7: "agent", 8: "hcs" };
   function esc(text) { return text.replace(/[&<>"']/g, function (ch) { return "&#" + ch.charCodeAt(0) + ";"; }); }
-  function linkify(html) { return html.replace(/https?:\\/\\/[^\\s<]+/g, function (url) { return '<a href="' + url + '" target="_blank" style="color:#9db8ff">' + url + "</a>"; }); }
+  function linkify(html) { return html.replace(/https?:\\/\\/[^\\s<]+/g, function (url) { return '<a href="' + url + '" target="_blank">' + url + "</a>"; }); }
   button.addEventListener("click", function () {
     button.disabled = true;
+    button.textContent = "Running the agent…";
     hint.style.display = "none";
+    status.className = "status on";
+    statusText.textContent = "Running in the background…";
     log.style.display = "block";
     log.innerHTML = "";
-    document.querySelectorAll("[data-rail]").forEach(function (chip) { chip.style.background = "#fff"; });
+    document.querySelectorAll("[data-rail]").forEach(function (chip) { chip.classList.remove("lit"); });
     var events = new EventSource("/demo/run");
     events.addEventListener("line", function (event) {
       log.innerHTML += linkify(esc(event.data)) + "\\n";
@@ -220,15 +337,24 @@ export function createApp(options: AppOptions): Hono {
       var step = event.data.match(/^\\[agent\\] (\\d)/);
       if (step && STAGE[step[1]]) {
         var chip = document.querySelector('[data-rail="' + STAGE[step[1]] + '"]');
-        if (chip) chip.style.background = "#e3f0ec";
+        if (chip) chip.classList.add("lit");
       }
     });
     events.addEventListener("done", function () {
       events.close();
       button.disabled = false;
+      button.textContent = label;
+      status.className = "status on done";
+      statusText.textContent = "Complete — settlement finished. See the receipt below.";
       hint.style.display = "block";
     });
-    events.onerror = function () { events.close(); button.disabled = false; };
+    events.onerror = function () {
+      events.close();
+      button.disabled = false;
+      button.textContent = label;
+      status.className = "status on err";
+      statusText.textContent = "Run ended — the stream closed (see the log above).";
+    };
   });
 })();
 </script>`);

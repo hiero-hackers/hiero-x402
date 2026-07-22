@@ -10,8 +10,8 @@ import { resolve } from "node:path";
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const SHOTS = [
-  ["receipt.html", "docs/receipt.png", 620, "npm run e2e"],
-  ["verified-receipt.html", "docs/verified-receipt.png", 560, "npm run provenance"],
+  ["receipt.html", "docs/receipt.png", 920, "npm run e2e"],
+  ["verified-receipt.html", "docs/verified-receipt.png", 820, "npm run provenance"],
 ];
 
 mkdirSync("docs", { recursive: true });

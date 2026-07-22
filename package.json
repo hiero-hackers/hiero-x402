@@ -68,7 +68,8 @@
     "@x402/hedera": "2.19.0",
     "@x402/hono": "2.19.0",
     "@x402/paywall": "2.19.0",
-    "hono": "^4.6.0"
+    "hono": "^4.6.0",
+    "protobufjs": "^8.7.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
