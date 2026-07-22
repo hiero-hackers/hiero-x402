@@ -28,7 +28,10 @@ import {
 } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/facilitator";
 import { policyFromEnv, policyViolation, settleRefusal, verifyRefusal } from "./policy.js";
+import { hushBenignSdkWarnings } from "./quiet.js";
 import { FACILITATOR_PORT, demoNetwork, requireEnv, resolvePrivateKey } from "./shared.js";
+
+hushBenignSdkWarnings(); // drop the SDK's expected raw-HEX-key advisory (see quiet.ts)
 
 const NETWORK = demoNetwork(); // refuses anything but the pinned testnet
 const FEE_PAYER_ID = requireEnv("FACILITATOR_ACCOUNT_ID");

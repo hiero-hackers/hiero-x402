@@ -48,14 +48,17 @@ describe("verdictLine", () => {
 });
 
 describe("settlementReceiptHTML", () => {
-  it("carries the verdict, the reference, the proof link, and the receipt body", async () => {
+  it("carries the verdict, the reference, both proof links, and the receipt body", async () => {
     const verdict = await verdictFor(5_000_000);
     const html = settlementReceiptHTML(verdict);
-    expect(html).toContain("independently verified");
+    // The mirror rung is a "mirror receipt", never "verified" — the banner
+    // must not contradict the UNVERIFIED-stamped body (review request).
+    expect(html).toContain("Mirror receipt");
     expect(html).toContain("AGENT RAIL · x402"); // the rail chip — evidence, not species
     expect(html).toContain("Paid in full");
     expect(html).toContain(HBAR_REQUEST.reference);
     expect(html).toContain("hashscan.io/testnet/transaction/");
+    expect(html).toContain("/api/v1/transactions/"); // the raw mirror-node record link
     expect(html).toContain("public mirror node");
     expect(html).toContain("not the facilitator");
   });
@@ -81,7 +84,9 @@ describe("settlementReceiptHTML", () => {
     );
     const html = settlementReceiptHTML(verdict);
     expect(html).toContain("block proof");
+    expect(html).toContain("independently verified"); // this is the rung we DO call verified
     expect(html).not.toContain("mirror node");
+    expect(html).not.toContain("/api/v1/transactions/"); // no mirror is consulted on this path
   });
 
   it("omits the proof link when the mirror has no transaction, and escapes what it prints", async () => {

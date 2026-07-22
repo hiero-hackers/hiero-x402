@@ -19,7 +19,10 @@ import { createClientHederaSigner } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { settlementReceiptHTML, verdictLine, verifySettlement } from "../src/index.js";
 import { attest } from "./attest.js";
+import { hushBenignSdkWarnings } from "./quiet.js";
 import { demoNetwork, requireEnv, resolvePrivateKey } from "./shared.js";
+
+hushBenignSdkWarnings(); // drop the SDK's expected raw-HEX-key advisory (see quiet.ts)
 
 const NETWORK = demoNetwork();
 const ACCOUNT_ID = requireEnv("AGENT_ACCOUNT_ID");
@@ -91,6 +94,7 @@ const verdict = await verifySettlement(
 );
 console.log(`[agent]     ${verdictLine(verdict)}`);
 if (verdict.hashscanUrl !== undefined) console.log(`[agent]     proof: ${verdict.hashscanUrl}`);
+if (verdict.mirrorUrl !== undefined) console.log(`[agent]     mirror record: ${verdict.mirrorUrl}`);
 
 // The path is the operator's own env choice, not request-derived input.
 

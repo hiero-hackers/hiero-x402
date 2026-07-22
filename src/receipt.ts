@@ -42,29 +42,39 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
   // Say HOW it was verified — the receipts carry their provenance, and the
   // banner must not claim the mirror for a block-proof verdict (or vice versa).
   const proven = verdict.receipts.some((receipt) => receipt.provenance.kind === "verified");
+  // Wording discipline (review request): "verified" is reserved for the
+  // block-proof rung — cryptography. The mirror path is an independent
+  // *record*: the operator's attested data, re-checkable by anyone but not
+  // proven. So it is a "mirror receipt", never "verified" — the banner must
+  // not contradict the body, which already stamps the mirror receipt UNVERIFIED.
   const method = proven
     ? "Verified against the ledger&#39;s own block proof — cryptography, not the facilitator&#39;s word."
-    : "Verified against the public mirror node, not the facilitator&#39;s word.";
-  // Status word drives the accent — a fact from the verified verdict, never
-  // an assumption ("paid"/"overpaid" read as good; anything else is flagged).
+    : "Read from the public mirror node — the operator&#39;s attested record, not the facilitator&#39;s word.";
+  const eyebrow = proven ? "Certificate of settlement · block proof" : "Mirror receipt";
+  const title = proven
+    ? "x402 settlement — independently verified"
+    : "x402 settlement — mirror-node record";
+  // Status word drives the accent — a fact from the verdict, never an
+  // assumption ("paid"/"overpaid" read as good; anything else is flagged).
   const status = verdict.fulfilment.status;
   const good = status === "paid" || status === "overpaid";
   // The seal is the document's signature device: a stamped mark whose word
-  // states HOW the chain was consulted. Gold rim = block proof (cryptography);
-  // emerald = mirror-confirmed; amber = a verdict that needs a human's eye.
-  const sealWord = good ? (proven ? "BLOCK PROOF" : "VERIFIED") : "REVIEW";
-  const sealClass = good ? (proven ? "seal-proof" : "seal-ok") : "seal-warn";
+  // states HOW the chain was consulted. A bad verdict always reads REVIEW;
+  // otherwise gold = block proof (cryptography), steel = mirror record.
+  const sealWord = !good ? "REVIEW" : proven ? "BLOCK PROOF" : "MIRROR";
+  const sealClass = !good ? "seal-warn" : proven ? "seal-proof" : "seal-mirror";
+  const sealGlyph = !good ? "!" : proven ? "&check;" : "&#9678;"; // ◎ — on the record
   const banner = `<header class="x402-card">
   <div class="x402-seal ${sealClass}" aria-hidden="true">
-    <span class="x402-seal-glyph">${good ? "&check;" : "!"}</span>
+    <span class="x402-seal-glyph">${sealGlyph}</span>
     <span class="x402-seal-word">${sealWord}</span>
   </div>
   <div class="x402-top">
     <span class="x402-badge ${good ? "ok" : "warn"}">${escapeHTML(status.toUpperCase())}</span>
     <span class="x402-chip">AGENT RAIL · x402</span>
   </div>
-  <p class="x402-eyebrow">Certificate of settlement</p>
-  <h1 class="x402-title">x402 settlement — independently verified</h1>
+  <p class="x402-eyebrow">${eyebrow}</p>
+  <h1 class="x402-title">${title}</h1>
   <p class="x402-verdict">${escapeHTML(verdictLine(verdict))}</p>
   <p class="x402-note">machine-payable: fee-payer sponsored, no wallet memo — the rail, not the species, is what the chain can prove</p>
   <dl class="x402-meta">
@@ -74,6 +84,11 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
   ${
     verdict.hashscanUrl !== undefined
       ? `<p class="x402-proof"><a href="${escapeHTML(verdict.hashscanUrl)}">View on HashScan <span aria-hidden="true">↗</span></a> — anyone can re-check this.</p>`
+      : ""
+  }
+  ${
+    verdict.mirrorUrl !== undefined
+      ? `<p class="x402-proof x402-mirror"><a href="${escapeHTML(verdict.mirrorUrl)}">View the raw mirror-node record <span aria-hidden="true">↗</span></a> — the JSON this verdict was read from.</p>`
       : ""
   }
   <p class="x402-method">${method}</p>
@@ -89,7 +104,7 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
   :root{
     --ink:#0b0a10;--panel:#151220;--panel-2:#100e19;--line:#272235;--line-2:#332c46;
     --text:#eceaf4;--muted:#9d97ae;--faint:#6c657d;
-    --brand:#8071ff;--brand-soft:#b7adff;--proof:#3dd4a0;--gold:#e6b968;
+    --brand:#8071ff;--brand-soft:#b7adff;--proof:#3dd4a0;--gold:#e6b968;--steel:#9aa3b7;
     --warn:#f3b64d;--danger:#f4746b;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
     --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
@@ -122,6 +137,10 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
   .x402-seal.seal-warn{border-color:var(--warn);box-shadow:0 0 0 3px rgba(11,10,16,.9),0 0 0 4px rgba(243,182,77,.28);
     background:radial-gradient(circle at 50% 38%,rgba(243,182,77,.16),rgba(243,182,77,.04))}
   .x402-seal.seal-warn .x402-seal-glyph,.x402-seal.seal-warn .x402-seal-word{color:var(--warn)}
+  .x402-seal.seal-mirror{border-color:var(--steel);box-shadow:0 0 0 3px rgba(11,10,16,.9),0 0 0 4px rgba(154,163,183,.24);
+    background:radial-gradient(circle at 50% 38%,rgba(154,163,183,.14),rgba(154,163,183,.03))}
+  .x402-seal.seal-mirror .x402-seal-glyph,.x402-seal.seal-mirror .x402-seal-word{color:var(--steel)}
+  .x402-mirror a{color:var(--steel)}
   .x402-top{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:1.1rem}
   .x402-badge{font-size:.68rem;font-weight:700;letter-spacing:.08em;padding:.24rem .62rem;border-radius:6px;
     border:1px solid;text-transform:uppercase;font-family:var(--mono)}
@@ -183,7 +202,7 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
 </style>`;
   return `<div class="x402-wrap">
 ${theme}
-<div class="x402-brand"><span class="mark">x4</span>hiero-x402 <small>settlement, independently verified</small></div>
+<div class="x402-brand"><span class="mark">x4</span>hiero-x402 <small>verifiable settlement</small></div>
 ${banner}
 <div class="x402-bodies">${bodies}</div>
 <footer class="x402-foot"><span>hiero-x402 · x402 on Hiero with verifiable settlement</span><span>independent · facilitator-free verification</span></footer>
