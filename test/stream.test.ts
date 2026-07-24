@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { verifySettlementFromBlock } from "../src/index.js";
 
 const fixture = (name: string): Buffer =>
-  readFileSync(new URL(`../demo/fixtures/${name}`, import.meta.url));
+  readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
 const BLOCK = { blockBytes: fixture("467.blk.gz"), genesisBytes: fixture("0.blk.gz") };
 
 // The known payment inside fixture block 467 (preview network, 1 tinybar),

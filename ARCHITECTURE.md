@@ -92,7 +92,10 @@ demo/                     the bounty demo — consumes src/ like any user would
   agent.ts                pays via delegated signing, then verifies against the
                           mirror and writes receipt.html
   provenance.ts           the trust ladder's top rung on committed proven blocks
-  fixtures/               real preview-network blocks (genesis + block 467)
+
+test/                     the offline suite; test/fixtures/ holds the real
+                          preview-network blocks (genesis + block 467) the
+                          stream/receipt tests and demo provenance share
 
 research/                 the evidence; this file the map
 ```

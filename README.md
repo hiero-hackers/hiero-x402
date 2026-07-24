@@ -58,6 +58,29 @@ key, the server holds none, the agent holds its own — `npm run demo` just
 boots the first two in one terminal. `npm run facilitator` and
 `npm run server` still exist for running them apart.)
 
+**Three ways to demo it.** The hub's Run button has a run-mode selector:
+
+- **Autonomous** (default) — no human in the loop; the bounty's thesis.
+- **Hub button** — the agent pauses at step 2½ — terms known, **nothing
+  signed** — and the hub shows the exact spend to Approve or Decline; the
+  "human" chip on the rails appears only in approval modes. Same gate from a
+  terminal: `HUMAN_APPROVAL=1 npm run e2e` (answer y/N on stdin).
+- **Wallet-signed** — the approval itself becomes verifiable: the human's
+  wallet signs the exact terms line, the hub verifies the signature against
+  the approver's on-chain key (`APPROVER_ACCOUNT_ID`, key resolved from the
+  mirror at boot) before releasing the gate, and the signed consent rides
+  into the HCS attestation — the audit trail then records WHO approved WHICH
+  terms. Needs `APPROVER_ACCOUNT_ID` + `WALLETCONNECT_PROJECT_ID` (free, from
+  cloud.reown.com) in `.env`.
+
+The agent still leads every step in all three: it discovered the price, and
+after approval it signs, retries, verifies against the mirror, and writes its
+own receipt. Decline and the run ends with nothing signed, nothing spent.
+And the epistemics stay honest: signed consent doesn't force the agent's
+hand — the binding is post-hoc, exactly this repo's posture: the verifier
+checks the on-chain settlement against the terms, and the attestation now
+carries the human's signature over those same terms.
+
 The agent narrates each protocol step; the run ends with the verdict, the
 HashScan link, and `receipt.html` on disk. It exits non-zero unless the
 mirror confirms the exact amount landed — data paid for on the facilitator's

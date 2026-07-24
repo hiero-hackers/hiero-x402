@@ -15,6 +15,7 @@
  * serves data once settlement succeeds.
  */
 import { Buffer } from "node:buffer";
+import { PublicKey } from "@hiero-ledger/sdk";
 import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
@@ -37,12 +38,62 @@ export interface AppOptions {
   /** Withhold data until the mirror confirms — SECURITY.md § posture. */
   readonly verifyBeforeServe: boolean;
   /**
-   * Starts the agent as its OWN process and returns its narration stream
-   * (stdout+stderr merged). The server never holds the agent's key — the
-   * child reads it from .env itself. Absent → the hub's Run button is off
-   * and /demo/run answers 501 (the conformance app, static deployments).
+   * Starts the agent as its OWN process. The server never holds the agent's
+   * key — the child reads it from .env itself. Absent → the hub's Run
+   * button is off and /demo/run answers 501 (the conformance app, static
+   * deployments). With `humanApproval`, the child pauses at step 2½ until
+   * `decide` relays the human's answer to its stdin.
    */
-  readonly runAgent?: () => Readable;
+  readonly runAgent?: (options: { humanApproval: boolean }) => AgentRun;
+  /**
+   * The expected human approver for wallet-signed consent (optional).
+   * Resolved by the server at boot — the account id approvals must come
+   * from, and its on-chain public key from the mirror, so /demo/approve
+   * verifies signatures without any network call. Absent → the hub's
+   * wallet mode is hidden; button approval still works.
+   */
+  readonly approver?: { readonly accountId: string; readonly publicKey: string };
+  /** WalletConnect project id for the hub's wallet pairing (optional). */
+  readonly walletProjectId?: string;
+}
+
+/** A started agent run: its narration, and — in approval mode — the gate. */
+export interface AgentRun {
+  /** stdout+stderr merged, line-oriented. */
+  readonly narration: Readable;
+  /**
+   * Answers a pending 2½ approval prompt; absent outside approval mode.
+   * `consent` (base64 JSON: accountId, terms, signature) rides along when
+   * the approval was wallet-signed and hub-verified.
+   */
+  readonly decide?: (approve: boolean, consent?: string) => void;
+}
+
+/**
+ * Does `signature` (base64) verify as the approver's key over the terms the
+ * paused agent printed? Tries the raw bytes and the legacy
+ * "Hedera Signed Message" prefix some wallets apply — either is the same
+ * human consenting to the same terms.
+ */
+function verifyConsent(publicKey: string, terms: string, signatureB64: string): boolean {
+  let key: PublicKey;
+  try {
+    key = PublicKey.fromString(publicKey);
+  } catch {
+    return false;
+  }
+  const signature = Buffer.from(signatureB64, "base64");
+  if (signature.length === 0) return false;
+  const direct = Buffer.from(terms, "utf8");
+  const prefixed = Buffer.concat([
+    Buffer.from(`\x19Hedera Signed Message:\n${direct.length}`, "utf8"),
+    direct,
+  ]);
+  try {
+    return key.verify(direct, signature) || key.verify(prefixed, signature);
+  } catch {
+    return false;
+  }
 }
 
 export function createApp(options: AppOptions): Hono {
@@ -131,19 +182,6 @@ export function createApp(options: AppOptions): Hono {
   const esc = (text: string): string => text.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
   app.get("/ui", (c) => {
     const topic = process.env.ATTEST_TOPIC_ID ?? "";
-    const rows = CATALOG.map((product) => {
-      const price =
-        product.asset.kind === "hbar"
-          ? `${product.amount.toString()} tinybar`
-          : `${product.amount.toString()} ${product.asset.symbol} base units`;
-      const link = toLink(productRequest(product, payTo, network), checkoutBase);
-      return `<tr>
-        <td><code>${esc(product.path)}</code></td>
-        <td>${esc(product.label)}</td>
-        <td style="text-align:right"><span class="price">${esc(price)}</span></td>
-        <td style="text-align:right"><a class="pay" href="${esc(link)}">pay as a human ↗</a></td>
-      </tr>`;
-    }).join("");
     // Receipts are the project's USP, so each is a card, not a list item — a
     // clear split between the two rungs of the trust ladder (block-proof =
     // "verified"; mirror = an independent "mirror receipt", never "verified").
@@ -156,7 +194,7 @@ export function createApp(options: AppOptions): Hono {
     ): string => {
       const inner = `<span class="tag">${tag}</span><h3>${title}</h3><p>${desc}</p>`;
       return existsSync(file)
-        ? `<a class="rcard ${kind}" href="/receipts/${file.replace(".html", "")}">${inner}<span class="open">Open receipt →</span></a>`
+        ? `<a class="rcard ${kind}" href="/receipts/${file.replace(".html", "")}">${inner}<span class="open">Open receipt ↓</span></a>`
         : `<div class="rcard ${kind} empty">${inner}<span class="open">none yet — run the demo</span></div>`;
     };
     return c.html(`<!doctype html>
@@ -215,6 +253,24 @@ export function createApp(options: AppOptions): Hono {
     background:linear-gradient(180deg,rgba(61,212,160,.2),rgba(61,212,160,.07));
     box-shadow:0 0 0 1px rgba(61,212,160,.3),0 8px 20px -10px rgba(61,212,160,.55)}
   .arrow{color:var(--faint);font-size:.8rem}
+  .human-stage{display:none}
+  .rails.with-human .human-stage{display:inline-block}
+  .rail.wait{border-color:rgba(243,182,77,.55);color:#fff7e8;
+    background:linear-gradient(180deg,rgba(243,182,77,.22),rgba(243,182,77,.06));
+    box-shadow:0 0 0 1px rgba(243,182,77,.32),0 8px 20px -10px rgba(243,182,77,.5);animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{50%{filter:brightness(1.25)}}
+  .toggle-group{display:flex;flex-direction:column;gap:.35rem;margin-top:1.05rem}
+  .toggle{display:flex;align-items:center;gap:.5rem;font-size:.82rem;color:var(--muted);
+    cursor:pointer;user-select:none;font-family:var(--mono)}
+  .toggle input{accent-color:var(--warn);width:15px;height:15px;margin:0;cursor:pointer}
+  .toggle b{color:var(--warn);font-weight:600}
+  .approve{display:none;margin-top:1.05rem;padding:.95rem 1.1rem;border:1px solid rgba(243,182,77,.45);
+    border-radius:12px;background:rgba(243,182,77,.07);gap:.6rem;align-items:center;flex-wrap:wrap;font-size:.86rem}
+  .approve.on{display:flex}
+  .approve .terms{flex:1 1 100%;color:#fff7e8;font-family:var(--mono);font-size:.8rem}
+  .approve .btn{margin-top:0;padding:.5rem .95rem;font-size:.84rem}
+  .btn.ghost{background:transparent;border:1px solid var(--line-2);color:var(--muted);box-shadow:none}
+  .btn.ghost:hover{color:var(--text);border-color:var(--line-2)}
   .btn{margin-top:1.15rem;display:inline-flex;align-items:center;gap:.5rem;padding:.66rem 1.15rem;border:none;cursor:pointer;
     border-radius:10px;font-size:.9rem;font-weight:600;font-family:inherit;color:#0a0c11;
     background:linear-gradient(135deg,var(--brand),#5b8bff);box-shadow:0 10px 24px -10px rgba(128,113,255,.8);transition:.2s}
@@ -258,6 +314,14 @@ export function createApp(options: AppOptions): Hono {
   .rcard p{margin:0;color:var(--muted);font-size:.86rem;flex:1}
   .rcard .open{margin-top:.85rem;font-weight:600;font-size:.85rem;color:var(--brand-soft)}
   .rcard.empty{opacity:.55}
+  .viewer{display:none;margin-top:1rem;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--panel-2)}
+  .viewer.on{display:block}
+  .viewer-bar{display:flex;align-items:center;gap:.75rem;padding:.6rem .95rem;border-bottom:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+  .viewer-bar .vtitle{flex:1;font-weight:600;color:var(--text)}
+  .viewer-bar a{color:var(--brand-soft)}
+  .viewer-bar button{background:none;border:none;color:var(--muted);font-size:1rem;cursor:pointer;padding:.1rem .4rem;line-height:1}
+  .viewer-bar button:hover{color:var(--text)}
+  .viewer iframe{display:block;width:100%;height:34rem;border:0;background:#fff}
   .rcard.empty .open{color:var(--faint)}
   @media(max-width:600px){.receipts{grid-template-columns:1fr}}
   footer{margin-top:2.75rem;padding-top:1.35rem;border-top:1px solid var(--line);
@@ -273,9 +337,10 @@ export function createApp(options: AppOptions): Hono {
   <header class="hero">
     <p class="eyebrow">HTTP 402 · verifiable settlement on Hiero</p>
     <h1>Settlement you don't have to trust.</h1>
-    <p>Mock market data behind HTTP&nbsp;402. Agents pay the 402 challenge; humans pay the
-    same price via checkout — and every settlement is independently verified against the
-    ledger, not the facilitator's word.</p>
+    <p>Mock market data behind HTTP&nbsp;402. An agent discovers the price and pays —
+    fully autonomously, or pausing for a human to approve the spend (hub button or a
+    wallet-signed consent) — and every settlement is independently verified against
+    the ledger, not the facilitator's word.</p>
   </header>
 
   <div class="grid">
@@ -285,6 +350,7 @@ export function createApp(options: AppOptions): Hono {
       <div class="rails">
         <span class="rail" data-rail="agent">agent · client key</span><span class="arrow">→</span>
         <span class="rail" data-rail="server">server · no keys</span><span class="arrow">→</span>
+        <span class="rail human-stage" data-rail="human">human · approves the spend</span><span class="arrow human-stage">→</span>
         <span class="rail" data-rail="facilitator">facilitator · fee-payer key</span><span class="arrow">→</span>
         <span class="rail" data-rail="chain">Hedera testnet</span><span class="arrow">→</span>
         <span class="rail" data-rail="mirror">mirror verify</span><span class="arrow">→</span>
@@ -292,12 +358,27 @@ export function createApp(options: AppOptions): Hono {
       </div>
       ${
         options.runAgent !== undefined
-          ? `<button id="run-agent" class="btn">▶ Run the agent — pays real testnet HBAR</button>`
+          ? `<div class="toggle-group" id="mode-group">
+               <label class="toggle"><input type="radio" name="run-mode" value="auto" checked><span>autonomous — no human in the loop</span></label>
+               <label class="toggle"><input type="radio" name="run-mode" value="button"><span>pause for approval — <b>hub button</b></span></label>
+               ${
+                 options.approver !== undefined && options.walletProjectId !== undefined
+                   ? `<label class="toggle"><input type="radio" name="run-mode" value="wallet"><span>pause for approval — <b>wallet-signed</b> by ${esc(options.approver.accountId)}</span></label>`
+                   : `<span class="note">wallet-signed approval is off — set APPROVER_ACCOUNT_ID and WALLETCONNECT_PROJECT_ID in .env</span>`
+               }
+             </div>
+             <button id="run-agent" class="btn">▶ Run the agent — pays real testnet HBAR</button>
+             <div id="approve-panel" class="approve">
+               <span class="terms" id="approve-terms"></span>
+               <button id="approve-wallet" class="btn" style="display:none">🔏 Sign approval in wallet</button>
+               <button id="approve-yes" class="btn">✓ Approve payment</button>
+               <button id="approve-no" class="btn ghost">✗ Decline</button>
+             </div>`
           : `<p class="note">Live runs are off here — start via <code>npm run demo</code> and use the hub it prints.</p>`
       }
       <div id="run-status" class="status"><span class="spin"></span><span id="run-status-text">Running in the background…</span></div>
       <pre id="run-log" style="display:none"></pre>
-      <p id="run-hint" style="display:none">Done — <a href="/receipts/receipt">open the fresh receipt</a> (the rails above show how far the run got).</p>
+      <p id="run-hint" style="display:none">Done — <a href="/receipts/receipt">open the fresh receipt</a>.</p>
     </section>
 
     <section class="card">
@@ -319,15 +400,14 @@ export function createApp(options: AppOptions): Hono {
           "The ledger's own block proof — recomputed and checked before a single field is believed. Cryptography, not attestation: the only receipt we call verified.",
         )}
       </div>
-    </section>
-
-    <section class="card">
-      <h2>Catalog — one price, two rails</h2>
-      <p class="sub">Agents <code>GET</code> any path → 402 challenge → pay → data. Humans scan the same terms via checkout.</p>
-      <table>
-        <thead><tr><th>Path</th><th>Product</th><th style="text-align:right">Price</th><th style="text-align:right">Checkout</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <div id="receipt-viewer" class="viewer">
+        <div class="viewer-bar">
+          <span class="vtitle" id="viewer-title"></span>
+          <a id="viewer-pop" href="#" target="_blank">open full ↗</a>
+          <button id="viewer-close" title="close">✕</button>
+        </div>
+        <iframe id="receipt-frame" title="receipt"></iframe>
+      </div>
     </section>
 
     <section class="card">
@@ -347,6 +427,28 @@ export function createApp(options: AppOptions): Hono {
 </div>
 <script>
 (function () {
+  // Inline receipt viewer — the demo stays on this screen.
+  var viewer = document.getElementById("receipt-viewer");
+  var frame = document.getElementById("receipt-frame");
+  document.querySelectorAll("a.rcard").forEach(function (card) {
+    card.addEventListener("click", function (e) {
+      e.preventDefault();
+      var href = card.getAttribute("href");
+      if (viewer.classList.contains("on") && frame.getAttribute("src") === href) {
+        viewer.classList.remove("on");
+        return;
+      }
+      frame.setAttribute("src", href);
+      document.getElementById("viewer-pop").setAttribute("href", href);
+      document.getElementById("viewer-title").textContent = card.querySelector("h3").textContent;
+      viewer.classList.add("on");
+      viewer.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  });
+  document.getElementById("viewer-close").addEventListener("click", function () {
+    viewer.classList.remove("on");
+  });
+
   var button = document.getElementById("run-agent");
   if (!button) return;
   var log = document.getElementById("run-log");
@@ -358,6 +460,96 @@ export function createApp(options: AppOptions): Hono {
   var STAGE = { 1: "server", 2: "server", 3: "agent", 4: "facilitator", 5: "chain", 6: "mirror", 7: "agent", 8: "hcs" };
   function esc(text) { return text.replace(/[&<>"']/g, function (ch) { return "&#" + ch.charCodeAt(0) + ";"; }); }
   function linkify(html) { return html.replace(/https?:\\/\\/[^\\s<]+/g, function (url) { return '<a href="' + url + '" target="_blank">' + url + "</a>"; }); }
+  var WALLET = ${JSON.stringify({
+    projectId: options.walletProjectId ?? "",
+    approver: options.approver?.accountId ?? "",
+  })};
+  var panel = document.getElementById("approve-panel");
+  var terms = document.getElementById("approve-terms");
+  var pausedTerms = null;
+  function runMode() {
+    var checked = document.querySelector('input[name="run-mode"]:checked');
+    return checked ? checked.value : "auto";
+  }
+  function humanChip() { return document.querySelector('[data-rail="human"]'); }
+  function decide(approve) {
+    panel.classList.remove("on");
+    fetch("/demo/approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ approve: approve }),
+    });
+  }
+  function extractSignature(result) {
+    var raw =
+      result &&
+      (result.userSignature ||
+        result.signature ||
+        (result[0] && (result[0].userSignature || result[0].signature)));
+    if (!raw) return null;
+    if (typeof raw === "string") return raw;
+    var bytes = raw instanceof Uint8Array ? raw : raw.data ? new Uint8Array(raw.data) : null;
+    if (!bytes) return null;
+    var bin = "";
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+  async function walletApprove() {
+    try {
+      if (!pausedTerms) throw new Error("no paused terms captured");
+      statusText.textContent = "Waiting for the wallet signature…";
+      var sdk = await import("https://esm.sh/@hashgraph/sdk@2?bundle");
+      var hcmod = await import("https://esm.sh/hashconnect@3?bundle");
+      if (!window.__hc) {
+        var hc = new hcmod.HashConnect(
+          sdk.LedgerId.TESTNET,
+          WALLET.projectId,
+          { name: "hiero-x402 demo", description: "human approval", icons: [], url: location.origin },
+          false,
+        );
+        var paired = new Promise(function (res) { hc.pairingEvent.on(res); });
+        await hc.init();
+        if (!(hc.connectedAccountIds && hc.connectedAccountIds.length)) {
+          hc.openPairingModal();
+          await paired;
+        }
+        window.__hc = hc;
+      }
+      var hc2 = window.__hc;
+      var acct =
+        hc2.connectedAccountIds && hc2.connectedAccountIds.length
+          ? hc2.connectedAccountIds[0].toString()
+          : WALLET.approver;
+      var result = await hc2.signMessages(sdk.AccountId.fromString(acct), pausedTerms);
+      var sig = extractSignature(result);
+      if (!sig) throw new Error("could not read a signature from the wallet response");
+      var resp = await fetch("/demo/approve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ approve: true, accountId: acct, signature: sig }),
+      });
+      if (!resp.ok) {
+        var e = await resp.json().catch(function () { return {}; });
+        throw new Error(e.error || "hub answered " + resp.status);
+      }
+      panel.classList.remove("on");
+    } catch (err) {
+      statusText.textContent = "Wallet approval failed (" + (err && err.message) + ") — the button below still works.";
+      document.getElementById("approve-yes").style.display = "";
+    }
+  }
+  document.getElementById("approve-yes").addEventListener("click", function () { decide(true); });
+  document.getElementById("approve-no").addEventListener("click", function () { decide(false); });
+  document.getElementById("approve-wallet").addEventListener("click", function () { walletApprove(); });
+  var proofUrl = null;
+  function syncHumanStage() {
+    var rails = document.querySelector(".rails");
+    if (rails) rails.classList.toggle("with-human", runMode() !== "auto");
+  }
+  document.querySelectorAll('input[name="run-mode"]').forEach(function (radio) {
+    radio.addEventListener("change", syncHumanStage);
+  });
+  syncHumanStage();
   button.addEventListener("click", function () {
     button.disabled = true;
     button.textContent = "Running the agent…";
@@ -366,8 +558,15 @@ export function createApp(options: AppOptions): Hono {
     statusText.textContent = "Running in the background…";
     log.style.display = "block";
     log.innerHTML = "";
-    document.querySelectorAll("[data-rail]").forEach(function (chip) { chip.classList.remove("lit"); });
-    var events = new EventSource("/demo/run");
+    document.querySelectorAll("[data-rail]").forEach(function (chip) { chip.classList.remove("lit", "wait"); });
+    proofUrl = null;
+    pausedTerms = null;
+    panel.classList.remove("on");
+    var mode = runMode();
+    document.querySelectorAll('input[name="run-mode"]').forEach(function (radio) { radio.disabled = true; });
+    document.getElementById("approve-wallet").style.display = mode === "wallet" ? "" : "none";
+    document.getElementById("approve-yes").style.display = mode === "wallet" ? "none" : "";
+    var events = new EventSource("/demo/run" + (mode !== "auto" ? "?approval=1" : ""));
     events.addEventListener("line", function (event) {
       log.innerHTML += linkify(esc(event.data)) + "\\n";
       log.scrollTop = log.scrollHeight;
@@ -376,18 +575,46 @@ export function createApp(options: AppOptions): Hono {
         var chip = document.querySelector('[data-rail="' + STAGE[step[1]] + '"]');
         if (chip) chip.classList.add("lit");
       }
+      if (event.data.indexOf("AWAITING HUMAN APPROVAL") !== -1) {
+        humanChip().classList.add("wait");
+        var shown = event.data.replace(/^.*AWAITING HUMAN APPROVAL — /, "").replace(/\\? \\(y\\/N\\)$/, "");
+        pausedTerms = shown;
+        terms.textContent = shown;
+        panel.classList.add("on");
+        statusText.textContent = "Paused — the agent is waiting for YOUR approval.";
+      }
+      if (event.data.indexOf("approved by human") !== -1) {
+        humanChip().classList.remove("wait");
+        humanChip().classList.add("lit");
+        panel.classList.remove("on");
+        statusText.textContent = "Approved — the agent takes it from here…";
+      }
+      if (event.data.indexOf("declined by human") !== -1) {
+        humanChip().classList.remove("wait");
+        panel.classList.remove("on");
+      }
+      var proof = event.data.match(/hashscan: (https?:\\/\\/\\S+)/);
+      if (proof) proofUrl = proof[1];
     });
     events.addEventListener("done", function () {
       events.close();
       button.disabled = false;
+      document.querySelectorAll('input[name="run-mode"]').forEach(function (radio) { radio.disabled = false; });
+      panel.classList.remove("on");
       button.textContent = label;
       status.className = "status on done";
       statusText.textContent = "Complete — settlement finished. See the receipt below.";
+      if (proofUrl) {
+        hint.innerHTML =
+          'Settled — <a href="' + esc(proofUrl) + '" target="_blank">check the transaction on HashScan ↗</a>';
+      }
       hint.style.display = "block";
     });
     events.onerror = function () {
       events.close();
       button.disabled = false;
+      document.querySelectorAll('input[name="run-mode"]').forEach(function (radio) { radio.disabled = false; });
+      panel.classList.remove("on");
       button.textContent = label;
       status.className = "status on err";
       statusText.textContent = "Run ended — the stream closed (see the log above).";
@@ -401,6 +628,8 @@ export function createApp(options: AppOptions): Hono {
   // process holding its own key) and streams its numbered narration back
   // as server-sent events. One run at a time — settlements are real.
   let agentRunning = false;
+  let pendingDecision: ((approve: boolean, consent?: string) => void) | undefined;
+  let pendingTerms: string | undefined;
   app.get("/demo/run", (c) => {
     const runAgent = options.runAgent;
     if (runAgent === undefined) {
@@ -410,17 +639,78 @@ export function createApp(options: AppOptions): Hono {
       return c.json({ error: "a run is already in progress — one settlement at a time" }, 409);
     }
     agentRunning = true;
-    const lines = createInterface({ input: runAgent() });
+    const run = runAgent({ humanApproval: c.req.query("approval") === "1" });
+    pendingDecision = run.decide;
+    const lines = createInterface({ input: run.narration });
     return streamSSE(c, async (sse) => {
       try {
         for await (const line of lines) {
+          // The paused terms, verbatim — exactly what a wallet must sign.
+          const paused = line.match(/AWAITING HUMAN APPROVAL — (.+)\? \(y\/N\)$/);
+          if (paused !== null) pendingTerms = paused[1];
           await sse.writeSSE({ event: "line", data: line });
         }
         await sse.writeSSE({ event: "done", data: "run complete" });
       } finally {
         agentRunning = false;
+        pendingDecision = undefined;
+        pendingTerms = undefined;
       }
     });
+  });
+
+  // The hub's Approve/Decline buttons land here; the answer is relayed to
+  // the paused agent's stdin. The gate itself lives in the agent — this
+  // endpoint is only transport, so a curl can approve just as well.
+  app.post("/demo/approve", async (c) => {
+    if (options.runAgent === undefined) {
+      return c.json({ error: "live runs are disabled here — no agent runner attached" }, 501);
+    }
+    const decide = pendingDecision;
+    if (!agentRunning || decide === undefined) {
+      return c.json({ error: "no approval pending — start a run with approval on" }, 409);
+    }
+    const body = (await c.req.json().catch(() => ({}))) as {
+      approve?: boolean;
+      accountId?: string;
+      signature?: string;
+    };
+    if (body.signature !== undefined) {
+      // Wallet-signed consent: cryptographic approval, verified against the
+      // approver's on-chain key over the exact terms the agent printed.
+      const approver = options.approver;
+      if (approver === undefined) {
+        return c.json({ error: "no approver configured — wallet approvals are off" }, 501);
+      }
+      if (pendingTerms === undefined) {
+        return c.json({ error: "no terms pending — nothing to sign yet" }, 409);
+      }
+      if (body.accountId !== approver.accountId) {
+        return c.json(
+          { error: "approvals must come from the configured APPROVER_ACCOUNT_ID" },
+          403,
+        );
+      }
+      if (!verifyConsent(approver.publicKey, pendingTerms, body.signature)) {
+        return c.json(
+          { error: "signature did not verify against the approver's on-chain key" },
+          403,
+        );
+      }
+      const consent = Buffer.from(
+        JSON.stringify({
+          accountId: body.accountId,
+          terms: pendingTerms,
+          signature: body.signature,
+        }),
+      ).toString("base64");
+      pendingDecision = undefined;
+      decide(true, consent);
+      return c.json({ ok: true, verified: true });
+    }
+    pendingDecision = undefined;
+    decide(body.approve === true);
+    return c.json({ ok: true });
   });
 
   // The demo's receipt artifacts, served when present (written by the agent

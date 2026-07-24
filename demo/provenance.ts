@@ -21,7 +21,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { settlementReceiptHTML, verdictLine, verifySettlementFromBlock } from "../src/index.js";
 
 const fixture = (name: string): Buffer =>
-  readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
+  readFileSync(new URL(`../test/fixtures/${name}`, import.meta.url));
 
 // The known payment inside fixture block 467: 1 tinybar to 11.12.98,
 // identified by its TRUE transaction id (payer@validStart — streams-node

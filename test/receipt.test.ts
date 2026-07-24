@@ -67,7 +67,7 @@ describe("settlementReceiptHTML", () => {
     const { verifySettlementFromBlock } = await import("../src/index.js");
     const { readFileSync } = await import("node:fs");
     const fixture = (name: string): Buffer =>
-      readFileSync(new URL(`../demo/fixtures/${name}`, import.meta.url));
+      readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
     const verdict = verifySettlementFromBlock(
       {
         scheme: "exact",

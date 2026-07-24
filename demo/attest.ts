@@ -24,6 +24,19 @@ import type { SettlementVerdict } from "../src/index.js";
 import { HASHSCAN_HOSTS, attestationMessage } from "../src/index.js";
 import { demoNetwork } from "./shared.js";
 
+/** Merge the wallet-signed consent into the attestation JSON when present. */
+function withConsent(
+  message: string,
+  humanConsent?: { accountId: string; terms: string; signature: string },
+): string {
+  if (humanConsent === undefined) return message;
+  try {
+    return JSON.stringify({ ...(JSON.parse(message) as object), humanConsent });
+  } catch {
+    return message; // non-JSON attestation shape — leave it untouched
+  }
+}
+
 export interface AttestationResult {
   readonly topicId: string;
   readonly hashscanTopicUrl: string;
@@ -38,6 +51,7 @@ export async function attest(
   verdict: SettlementVerdict,
   topicIdOrCreate: string,
   operator: { accountId: string; key: InstanceType<typeof PrivateKey> },
+  humanConsent?: { accountId: string; terms: string; signature: string },
 ): Promise<AttestationResult> {
   const network = demoNetwork(); // the gate applies here too
   const bare = network.slice(network.indexOf(":") + 1);
@@ -56,7 +70,7 @@ export async function attest(
     await (
       await new TopicMessageSubmitTransaction()
         .setTopicId(topicId)
-        .setMessage(attestationMessage(verdict))
+        .setMessage(withConsent(attestationMessage(verdict), humanConsent))
         .execute(client)
     ).getReceipt(client);
     return {
