@@ -62,8 +62,9 @@ const APPROVER_ID = process.env.APPROVER_ACCOUNT_ID ?? "";
 const WALLET_PROJECT_ID = process.env.WALLETCONNECT_PROJECT_ID ?? "";
 const approverKey = APPROVER_ID === "" ? undefined : await fetchAccountPublicKey(APPROVER_ID);
 if (APPROVER_ID !== "" && approverKey === undefined) {
+  // Log the env var's NAME, never its value (CodeQL: clear-text logging).
   console.warn(
-    `[server] could not resolve ${APPROVER_ID}'s key — wallet approvals are off this run`,
+    "[server] could not resolve APPROVER_ACCOUNT_ID's key from the mirror — wallet approvals are off this run",
   );
 }
 const VERIFY_BEFORE_SERVE = process.env.VERIFY_BEFORE_SERVE === "1";

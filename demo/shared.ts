@@ -128,29 +128,28 @@ export async function confirmPayToAccount(accountId: string): Promise<void> {
     if (!response.ok) throw new Error(`mirror answered ${response.status}`);
     body = (await response.json()) as typeof body;
   } catch (error) {
+    // Messages name the env var, never its value (CodeQL: clear-text logging).
     const reason = error instanceof Error ? error.message : String(error);
     console.warn(
-      `[demo] could not confirm payTo ${accountId} against the mirror (${reason}) — proceeding.`,
+      `[demo] could not confirm PAY_TO_ACCOUNT against the mirror (${reason}) — proceeding.`,
     );
     return;
   }
   if (body.deleted === true) {
-    console.error(
-      `[demo] payTo ${accountId} is deleted on-chain — set PAY_TO_ACCOUNT to a live account.`,
-    );
+    console.error("[demo] PAY_TO_ACCOUNT points at a deleted account — set it to a live one.");
     process.exit(1);
   }
   if (body.receiver_sig_required === true) {
     console.error(
-      `[demo] payTo ${accountId} has receiver_sig_required — every credit to it needs ITS ` +
-        `signature, which the x402 flow cannot supply, so settlement would die on-chain with ` +
-        `INVALID_SIGNATURE. Either clear the flag (Portal → account → receiver signature ` +
-        `required off, signed by that account's key) or set PAY_TO_ACCOUNT to an account ` +
-        `without it.`,
+      "[demo] PAY_TO_ACCOUNT has receiver_sig_required — every credit to it needs ITS " +
+        "signature, which the x402 flow cannot supply, so settlement would die on-chain with " +
+        "INVALID_SIGNATURE. Either clear the flag (Portal → account → receiver signature " +
+        "required off, signed by that account's key) or point PAY_TO_ACCOUNT at an account " +
+        "without it.",
     );
     process.exit(1);
   }
-  console.log(`[demo] payTo ✓ ${accountId} can receive x402 settlements (no receiver-sig flag)`);
+  console.log("[demo] payTo ✓ PAY_TO_ACCOUNT can receive x402 settlements (no receiver-sig flag)");
 }
 
 /** The demo network — env-overridable in name only: the gate still applies,

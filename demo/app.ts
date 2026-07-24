@@ -686,7 +686,10 @@ export function createApp(options: AppOptions): Hono {
         return c.json({ error: "no terms pending — nothing to sign yet" }, 409);
       }
       if (body.accountId !== approver.accountId) {
-        return c.json({ error: `approvals must come from ${approver.accountId}` }, 403);
+        return c.json(
+          { error: "approvals must come from the configured APPROVER_ACCOUNT_ID" },
+          403,
+        );
       }
       if (!verifyConsent(approver.publicKey, pendingTerms, body.signature)) {
         return c.json(
