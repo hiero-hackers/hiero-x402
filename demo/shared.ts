@@ -99,6 +99,19 @@ export async function resolvePrivateKey(
   }
 }
 
+/** The account's single on-chain public key (raw hex) from the mirror, or undefined. */
+export async function fetchAccountPublicKey(accountId: string): Promise<string | undefined> {
+  const host = MIRROR_HOSTS[demoNetwork()];
+  try {
+    const response = await fetch(`${host}/api/v1/accounts/${encodeURIComponent(accountId)}`);
+    if (!response.ok) return undefined;
+    const body = (await response.json()) as { key?: { key?: string } };
+    return body.key?.key;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Refuse a payTo the x402 flow can never settle to. The classic trap is
  * `receiver_sig_required`: crediting such an account needs the RECEIVER's

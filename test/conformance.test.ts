@@ -11,6 +11,7 @@ import { Buffer } from "node:buffer";
 import { Readable } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fromAny } from "@hiero-hackers/hiero-payment-requests";
+import { PrivateKey } from "@x402/hedera";
 import type { Hono } from "hono";
 import { createApp } from "../demo/app.js";
 import { policyFromEnv, policyViolation, settleRefusal, verifyRefusal } from "../demo/policy.js";
@@ -123,13 +124,11 @@ describe("402 challenge wire (v2 transport + Hedera scheme)", () => {
 });
 
 describe("the demo hub (/ui)", () => {
-  it("serves the human door: catalog rows, checkout twins, receipt slots", async () => {
+  it("serves the demo hub: run modes and receipt slots", async () => {
     const response = await app.request("/ui");
     expect(response.status).toBe(200);
     const html = await response.text();
-    expect(html).toContain("/data/spot-price");
-    expect(html).toContain("pay as a human");
-    expect(html).toContain("hiero-checkout");
+    expect(html).toContain("Live runs are off here"); // run modes render only with a runner
     expect(html).toContain("Receipts — the proof you keep");
     expect(html).toContain("Mirror receipt"); // the two rungs, clearly split
     expect(html).toContain("Block proof");
@@ -150,6 +149,58 @@ describe("the demo hub (/ui)", () => {
   it("/demo/run answers 501 honestly when no agent runner is attached", async () => {
     expect((await app.request("/demo/run")).status).toBe(501);
     expect((await app.request("/demo/approve", { method: "POST" })).status).toBe(501);
+  });
+
+  it("verifies a wallet-signed approval against the approver's key before releasing the gate", async () => {
+    const approverKey = PrivateKey.generateED25519();
+    const TERMS = "pay 5000000 tinybar of 0.0.0 to 0.0.7777 for /data/spot-price";
+    const decisions: Array<[boolean, string | undefined]> = [];
+    const withWallet = createApp({
+      network: "hedera:testnet",
+      payTo: PAY_TO,
+      facilitatorUrl,
+      checkoutBase: "https://hiero-hackers.github.io/hiero-checkout/",
+      verifyBeforeServe: false,
+      approver: { accountId: "0.0.4242", publicKey: approverKey.publicKey.toStringRaw() },
+      walletProjectId: "test-project",
+      runAgent: () => ({
+        narration: Readable.from(`[agent] 2½ · AWAITING HUMAN APPROVAL — ${TERMS}? (y/N)\n`),
+        decide: (approve, consent) => decisions.push([approve, consent]),
+      }),
+    });
+    const post = (body: object) =>
+      withWallet.request("/demo/approve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const streaming = withWallet.request("/demo/run?approval=1");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Wrong signer account: refused.
+    const stranger = PrivateKey.generateED25519();
+    const strangerSig = Buffer.from(stranger.sign(Buffer.from(TERMS, "utf8"))).toString("base64");
+    expect((await post({ accountId: "0.0.9999", signature: strangerSig })).status).toBe(403);
+    // Right account, signature over the WRONG terms: refused.
+    const wrongTerms = Buffer.from(
+      approverKey.sign(Buffer.from("something else", "utf8")),
+    ).toString("base64");
+    expect((await post({ accountId: "0.0.4242", signature: wrongTerms })).status).toBe(403);
+    // Right account, right terms: verified, gate released with the consent attached.
+    const goodSig = Buffer.from(approverKey.sign(Buffer.from(TERMS, "utf8"))).toString("base64");
+    const ok = await post({ approve: true, accountId: "0.0.4242", signature: goodSig });
+    expect(ok.status).toBe(200);
+    expect(decisions).toHaveLength(1);
+    const [approved, consent] = decisions[0]!;
+    expect(approved).toBe(true);
+    const parsed = JSON.parse(Buffer.from(consent!, "base64").toString("utf8")) as {
+      accountId: string;
+      terms: string;
+      signature: string;
+    };
+    expect(parsed.accountId).toBe("0.0.4242");
+    expect(parsed.terms).toBe(TERMS);
+    await (await streaming).text();
+    await new Promise((resolve) => setTimeout(resolve, 150));
   });
 
   it("/demo/approve relays the human's decision to the paused run's gate", async () => {
@@ -208,8 +259,12 @@ describe("the demo hub (/ui)", () => {
     expect(body).toContain("event: done");
     // The one-at-a-time lock must release after the stream ends.
     expect((await withRunner.request("/demo/run")).status).toBe(200);
-    // And the hub shows the button when a runner IS attached.
-    expect(await (await withRunner.request("/ui")).text()).toContain('<button id="run-agent"');
+    // And the hub shows the button + run modes when a runner IS attached.
+    const runnerHtml = await (await withRunner.request("/ui")).text();
+    expect(runnerHtml).toContain('<button id="run-agent"');
+    expect(runnerHtml).toContain("autonomous — no human in the loop");
+    expect(runnerHtml).toContain("hub button");
+    expect(runnerHtml).toContain("wallet-signed approval is off"); // no approver configured here
     // Let this app's middleware finish its /supported sync before teardown
     // closes the mock facilitator (same settle the main app gets).
     await new Promise((resolve) => setTimeout(resolve, 150));

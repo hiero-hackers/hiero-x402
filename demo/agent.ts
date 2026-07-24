@@ -19,6 +19,7 @@
  * TransferTransaction per run, for the exact advertised amount, on testnet
  * only — the gate refuses anything else before a single byte is signed.
  */
+import { Buffer } from "node:buffer";
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
@@ -40,6 +41,7 @@ const SYMBOL = process.env.SYMBOL ?? "HBAR";
 const RECEIPT_PATH = process.env.RECEIPT_PATH ?? "receipt.html";
 
 const AGENT_KEY = await resolvePrivateKey(ACCOUNT_ID, PRIVATE_KEY);
+let humanConsent: { accountId: string; terms: string; signature: string } | undefined;
 const signer = createClientHederaSigner(ACCOUNT_ID, AGENT_KEY, { network: NETWORK });
 const httpClient = new x402HTTPClient(
   new x402Client().register("hedera:*", new ExactHederaScheme(signer)),
@@ -75,21 +77,57 @@ if (process.env.HUMAN_APPROVAL === "1") {
     `[agent] 2½ · AWAITING HUMAN APPROVAL — pay ${accepted.amount} tinybar of ${accepted.asset} ` +
       `to ${accepted.payTo} for ${RESOURCE}? (y/N)`,
   );
-  const approved = await new Promise<boolean>((resolve) => {
+  const gate = await new Promise<{ approved: boolean; consent?: string }>((resolve) => {
     const prompt = createInterface({ input: process.stdin });
     prompt.once("line", (line) => {
       // Resolve BEFORE close(): close() emits "close" synchronously, and the
       // EOF fallback below would otherwise win the race and read as decline.
-      resolve(/^y(es)?$/i.test(line.trim()));
+      // Wire shape: "y" / "yes" approves; "y <base64>" carries the
+      // hub-verified consent along.
+      const answer = line.trim();
+      const space = answer.indexOf(" ");
+      const word = space === -1 ? answer : answer.slice(0, space);
+      const extra = space === -1 ? "" : answer.slice(space + 1).trim();
+      resolve(
+        /^y(es)?$/i.test(word)
+          ? extra !== ""
+            ? { approved: true, consent: extra }
+            : { approved: true }
+          : { approved: false },
+      );
       prompt.close();
     });
-    prompt.once("close", () => resolve(false)); // stdin EOF with no answer
+    prompt.once("close", () => resolve({ approved: false })); // stdin EOF with no answer
   });
-  if (!approved) {
+  // The gate is answered — release stdin, or its open pipe keeps the event
+  // loop (and therefore this process, the SSE stream, and the hub's run
+  // lock) alive after step 7.
+  process.stdin.destroy();
+  if (!gate.approved) {
     console.log("[agent] 2½ · declined by human — nothing signed, nothing spent");
     process.exit(3);
   }
-  console.log("[agent] 2½ · approved by human — the agent takes it from here");
+  // Wallet-signed consent (base64 JSON) rides in after the "y" — the hub
+  // verified the signature against the approver's on-chain key; keep it for
+  // the audit trail.
+  if (gate.consent !== undefined) {
+    try {
+      humanConsent = JSON.parse(Buffer.from(gate.consent, "base64").toString("utf8")) as {
+        accountId: string;
+        terms: string;
+        signature: string;
+      };
+      console.log(
+        `[agent] 2½ · approved by human — consent signed by ${humanConsent.accountId}, hub-verified`,
+      );
+    } catch {
+      console.log(
+        "[agent] 2½ · approved by human (consent blob unreadable — proceeding without it)",
+      );
+    }
+  } else {
+    console.log("[agent] 2½ · approved by human — the agent takes it from here");
+  }
 }
 
 console.log("[agent] 3 · signing the transfer (partially — the fee payer signs last)");
@@ -135,10 +173,12 @@ console.log(`[agent] 7 · receipt written to ${RECEIPT_PATH}`);
 const ATTEST_TOPIC_ID = process.env.ATTEST_TOPIC_ID ?? "";
 if (ATTEST_TOPIC_ID !== "") {
   try {
-    const result = await attest(verdict, ATTEST_TOPIC_ID, {
-      accountId: ACCOUNT_ID,
-      key: AGENT_KEY,
-    });
+    const result = await attest(
+      verdict,
+      ATTEST_TOPIC_ID,
+      { accountId: ACCOUNT_ID, key: AGENT_KEY },
+      humanConsent,
+    );
     console.log(`[agent] 8 · verdict attested to HCS topic ${result.topicId}`);
     console.log(`[agent]     audit log: ${result.hashscanTopicUrl}`);
     if (ATTEST_TOPIC_ID === "create") {

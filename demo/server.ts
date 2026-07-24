@@ -9,7 +9,14 @@
 import { spawn } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { serve } from "@hono/node-server";
-import { CATALOG, SERVER_PORT, confirmPayToAccount, demoNetwork, requireEnv } from "./shared.js";
+import {
+  CATALOG,
+  SERVER_PORT,
+  confirmPayToAccount,
+  demoNetwork,
+  fetchAccountPublicKey,
+  requireEnv,
+} from "./shared.js";
 import { createApp, type AgentRun } from "./app.js";
 
 // The hub's Run button. The agent stays its OWN process reading its OWN
@@ -37,8 +44,10 @@ function runAgent({ humanApproval }: { humanApproval: boolean }): AgentRun {
   if (!humanApproval) return { narration: output };
   return {
     narration: output,
-    decide: (approve): void => {
-      child.stdin?.write(approve ? "y\n" : "n\n");
+    decide: (approve, consent): void => {
+      // end() after the answer: the child needs nothing more from stdin, and
+      // a dangling pipe would keep it alive after its last step.
+      child.stdin?.end(approve ? (consent !== undefined ? `y ${consent}\n` : "y\n") : "n\n");
     },
   };
 }
@@ -46,6 +55,17 @@ function runAgent({ humanApproval }: { humanApproval: boolean }): AgentRun {
 const NETWORK = demoNetwork();
 const PAY_TO = requireEnv("PAY_TO_ACCOUNT");
 await confirmPayToAccount(PAY_TO); // refuses a payTo that can never settle (receiver-sig trap)
+
+// Wallet-signed approvals (optional): resolve the approver's on-chain key
+// once, so the hub can verify consent signatures without further lookups.
+const APPROVER_ID = process.env.APPROVER_ACCOUNT_ID ?? "";
+const WALLET_PROJECT_ID = process.env.WALLETCONNECT_PROJECT_ID ?? "";
+const approverKey = APPROVER_ID === "" ? undefined : await fetchAccountPublicKey(APPROVER_ID);
+if (APPROVER_ID !== "" && approverKey === undefined) {
+  console.warn(
+    `[server] could not resolve ${APPROVER_ID}'s key — wallet approvals are off this run`,
+  );
+}
 const VERIFY_BEFORE_SERVE = process.env.VERIFY_BEFORE_SERVE === "1";
 const FACILITATOR_URL = process.env.FACILITATOR_URL ?? "http://localhost:4020";
 
@@ -56,6 +76,10 @@ const app = createApp({
   checkoutBase: process.env.CHECKOUT_BASE ?? "https://hiero-hackers.github.io/hiero-checkout/",
   verifyBeforeServe: VERIFY_BEFORE_SERVE,
   runAgent,
+  ...(approverKey !== undefined
+    ? { approver: { accountId: APPROVER_ID, publicKey: approverKey } }
+    : {}),
+  ...(WALLET_PROJECT_ID !== "" ? { walletProjectId: WALLET_PROJECT_ID } : {}),
 });
 
 serve({ fetch: app.fetch, port: SERVER_PORT }, () => {
