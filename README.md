@@ -58,6 +58,16 @@ key, the server holds none, the agent holds its own — `npm run demo` just
 boots the first two in one terminal. `npm run facilitator` and
 `npm run server` still exist for running them apart.)
 
+**Two ways to demo it.** The hub's Run button has a human-in-the-loop
+toggle. Off (default), the agent is fully autonomous — the bounty's thesis.
+On, the agent pauses at step 2½ — terms known, **nothing signed** — and the
+hub shows the exact spend for you to Approve or Decline; the "human" chip on
+the rails lights only on this path. The agent still leads every step either
+way: it discovered the price, and after your approval it signs, retries,
+verifies against the mirror, and writes its own receipt. Decline and the run
+ends with nothing signed, nothing spent. Same gate from a terminal:
+`HUMAN_APPROVAL=1 npm run e2e` (answer y/N on stdin).
+
 The agent narrates each protocol step; the run ends with the verdict, the
 HashScan link, and `receipt.html` on disk. It exits non-zero unless the
 mirror confirms the exact amount landed — data paid for on the facilitator's

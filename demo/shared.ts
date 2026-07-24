@@ -99,6 +99,47 @@ export async function resolvePrivateKey(
   }
 }
 
+/**
+ * Refuse a payTo the x402 flow can never settle to. The classic trap is
+ * `receiver_sig_required`: crediting such an account needs the RECEIVER's
+ * signature, which neither the agent (debit) nor the facilitator (fees)
+ * can supply — it surfaces on-chain as a baffling INVALID_SIGNATURE at
+ * settle. Catch it at boot, with the cause and the fix, not the symptom.
+ * Mirror unreachable → warn and proceed (same posture as the key check).
+ */
+export async function confirmPayToAccount(accountId: string): Promise<void> {
+  const host = MIRROR_HOSTS[demoNetwork()];
+  let body: { deleted?: boolean; receiver_sig_required?: boolean };
+  try {
+    const response = await fetch(`${host}/api/v1/accounts/${encodeURIComponent(accountId)}`);
+    if (!response.ok) throw new Error(`mirror answered ${response.status}`);
+    body = (await response.json()) as typeof body;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[demo] could not confirm payTo ${accountId} against the mirror (${reason}) — proceeding.`,
+    );
+    return;
+  }
+  if (body.deleted === true) {
+    console.error(
+      `[demo] payTo ${accountId} is deleted on-chain — set PAY_TO_ACCOUNT to a live account.`,
+    );
+    process.exit(1);
+  }
+  if (body.receiver_sig_required === true) {
+    console.error(
+      `[demo] payTo ${accountId} has receiver_sig_required — every credit to it needs ITS ` +
+        `signature, which the x402 flow cannot supply, so settlement would die on-chain with ` +
+        `INVALID_SIGNATURE. Either clear the flag (Portal → account → receiver signature ` +
+        `required off, signed by that account's key) or set PAY_TO_ACCOUNT to an account ` +
+        `without it.`,
+    );
+    process.exit(1);
+  }
+  console.log(`[demo] payTo ✓ ${accountId} can receive x402 settlements (no receiver-sig flag)`);
+}
+
 /** The demo network — env-overridable in name only: the gate still applies,
  *  so anything outside ${SUPPORTED_NETWORKS} refuses to start. */
 export function demoNetwork(): "hedera:testnet" {

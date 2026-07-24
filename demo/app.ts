@@ -37,12 +37,21 @@ export interface AppOptions {
   /** Withhold data until the mirror confirms — SECURITY.md § posture. */
   readonly verifyBeforeServe: boolean;
   /**
-   * Starts the agent as its OWN process and returns its narration stream
-   * (stdout+stderr merged). The server never holds the agent's key — the
-   * child reads it from .env itself. Absent → the hub's Run button is off
-   * and /demo/run answers 501 (the conformance app, static deployments).
+   * Starts the agent as its OWN process. The server never holds the agent's
+   * key — the child reads it from .env itself. Absent → the hub's Run
+   * button is off and /demo/run answers 501 (the conformance app, static
+   * deployments). With `humanApproval`, the child pauses at step 2½ until
+   * `decide` relays the human's answer to its stdin.
    */
-  readonly runAgent?: () => Readable;
+  readonly runAgent?: (options: { humanApproval: boolean }) => AgentRun;
+}
+
+/** A started agent run: its narration, and — in approval mode — the gate. */
+export interface AgentRun {
+  /** stdout+stderr merged, line-oriented. */
+  readonly narration: Readable;
+  /** Answers a pending 2½ approval prompt; absent outside approval mode. */
+  readonly decide?: (approve: boolean) => void;
 }
 
 export function createApp(options: AppOptions): Hono {
@@ -156,7 +165,7 @@ export function createApp(options: AppOptions): Hono {
     ): string => {
       const inner = `<span class="tag">${tag}</span><h3>${title}</h3><p>${desc}</p>`;
       return existsSync(file)
-        ? `<a class="rcard ${kind}" href="/receipts/${file.replace(".html", "")}">${inner}<span class="open">Open receipt →</span></a>`
+        ? `<a class="rcard ${kind}" href="/receipts/${file.replace(".html", "")}">${inner}<span class="open">Open receipt ↓</span></a>`
         : `<div class="rcard ${kind} empty">${inner}<span class="open">none yet — run the demo</span></div>`;
     };
     return c.html(`<!doctype html>
@@ -215,6 +224,23 @@ export function createApp(options: AppOptions): Hono {
     background:linear-gradient(180deg,rgba(61,212,160,.2),rgba(61,212,160,.07));
     box-shadow:0 0 0 1px rgba(61,212,160,.3),0 8px 20px -10px rgba(61,212,160,.55)}
   .arrow{color:var(--faint);font-size:.8rem}
+  .human-stage{display:none}
+  .rails.with-human .human-stage{display:inline-block}
+  .rail.wait{border-color:rgba(243,182,77,.55);color:#fff7e8;
+    background:linear-gradient(180deg,rgba(243,182,77,.22),rgba(243,182,77,.06));
+    box-shadow:0 0 0 1px rgba(243,182,77,.32),0 8px 20px -10px rgba(243,182,77,.5);animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{50%{filter:brightness(1.25)}}
+  .toggle{display:flex;align-items:center;gap:.5rem;margin-top:1.05rem;font-size:.82rem;color:var(--muted);
+    cursor:pointer;user-select:none;font-family:var(--mono)}
+  .toggle input{accent-color:var(--warn);width:15px;height:15px;margin:0;cursor:pointer}
+  .toggle b{color:var(--warn);font-weight:600}
+  .approve{display:none;margin-top:1.05rem;padding:.95rem 1.1rem;border:1px solid rgba(243,182,77,.45);
+    border-radius:12px;background:rgba(243,182,77,.07);gap:.6rem;align-items:center;flex-wrap:wrap;font-size:.86rem}
+  .approve.on{display:flex}
+  .approve .terms{flex:1 1 100%;color:#fff7e8;font-family:var(--mono);font-size:.8rem}
+  .approve .btn{margin-top:0;padding:.5rem .95rem;font-size:.84rem}
+  .btn.ghost{background:transparent;border:1px solid var(--line-2);color:var(--muted);box-shadow:none}
+  .btn.ghost:hover{color:var(--text);border-color:var(--line-2)}
   .btn{margin-top:1.15rem;display:inline-flex;align-items:center;gap:.5rem;padding:.66rem 1.15rem;border:none;cursor:pointer;
     border-radius:10px;font-size:.9rem;font-weight:600;font-family:inherit;color:#0a0c11;
     background:linear-gradient(135deg,var(--brand),#5b8bff);box-shadow:0 10px 24px -10px rgba(128,113,255,.8);transition:.2s}
@@ -258,6 +284,14 @@ export function createApp(options: AppOptions): Hono {
   .rcard p{margin:0;color:var(--muted);font-size:.86rem;flex:1}
   .rcard .open{margin-top:.85rem;font-weight:600;font-size:.85rem;color:var(--brand-soft)}
   .rcard.empty{opacity:.55}
+  .viewer{display:none;margin-top:1rem;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--panel-2)}
+  .viewer.on{display:block}
+  .viewer-bar{display:flex;align-items:center;gap:.75rem;padding:.6rem .95rem;border-bottom:1px solid var(--line);font-size:.82rem;color:var(--muted)}
+  .viewer-bar .vtitle{flex:1;font-weight:600;color:var(--text)}
+  .viewer-bar a{color:var(--brand-soft)}
+  .viewer-bar button{background:none;border:none;color:var(--muted);font-size:1rem;cursor:pointer;padding:.1rem .4rem;line-height:1}
+  .viewer-bar button:hover{color:var(--text)}
+  .viewer iframe{display:block;width:100%;height:34rem;border:0;background:#fff}
   .rcard.empty .open{color:var(--faint)}
   @media(max-width:600px){.receipts{grid-template-columns:1fr}}
   footer{margin-top:2.75rem;padding-top:1.35rem;border-top:1px solid var(--line);
@@ -285,6 +319,7 @@ export function createApp(options: AppOptions): Hono {
       <div class="rails">
         <span class="rail" data-rail="agent">agent · client key</span><span class="arrow">→</span>
         <span class="rail" data-rail="server">server · no keys</span><span class="arrow">→</span>
+        <span class="rail human-stage" data-rail="human">human · approves the spend</span><span class="arrow human-stage">→</span>
         <span class="rail" data-rail="facilitator">facilitator · fee-payer key</span><span class="arrow">→</span>
         <span class="rail" data-rail="chain">Hedera testnet</span><span class="arrow">→</span>
         <span class="rail" data-rail="mirror">mirror verify</span><span class="arrow">→</span>
@@ -292,12 +327,19 @@ export function createApp(options: AppOptions): Hono {
       </div>
       ${
         options.runAgent !== undefined
-          ? `<button id="run-agent" class="btn">▶ Run the agent — pays real testnet HBAR</button>`
+          ? `<label class="toggle"><input type="checkbox" id="approval-toggle">
+               <span>human-in-the-loop: <b>pause for my approval</b> before the agent pays (off = fully autonomous)</span></label>
+             <button id="run-agent" class="btn">▶ Run the agent — pays real testnet HBAR</button>
+             <div id="approve-panel" class="approve">
+               <span class="terms" id="approve-terms"></span>
+               <button id="approve-yes" class="btn">✓ Approve payment</button>
+               <button id="approve-no" class="btn ghost">✗ Decline</button>
+             </div>`
           : `<p class="note">Live runs are off here — start via <code>npm run demo</code> and use the hub it prints.</p>`
       }
       <div id="run-status" class="status"><span class="spin"></span><span id="run-status-text">Running in the background…</span></div>
       <pre id="run-log" style="display:none"></pre>
-      <p id="run-hint" style="display:none">Done — <a href="/receipts/receipt">open the fresh receipt</a> (the rails above show how far the run got).</p>
+      <p id="run-hint" style="display:none">Done — <a href="/receipts/receipt">open the fresh receipt</a>.</p>
     </section>
 
     <section class="card">
@@ -318,6 +360,14 @@ export function createApp(options: AppOptions): Hono {
           "Verified settlement",
           "The ledger's own block proof — recomputed and checked before a single field is believed. Cryptography, not attestation: the only receipt we call verified.",
         )}
+      </div>
+      <div id="receipt-viewer" class="viewer">
+        <div class="viewer-bar">
+          <span class="vtitle" id="viewer-title"></span>
+          <a id="viewer-pop" href="#" target="_blank">open full ↗</a>
+          <button id="viewer-close" title="close">✕</button>
+        </div>
+        <iframe id="receipt-frame" title="receipt"></iframe>
       </div>
     </section>
 
@@ -347,6 +397,28 @@ export function createApp(options: AppOptions): Hono {
 </div>
 <script>
 (function () {
+  // Inline receipt viewer — the demo stays on this screen.
+  var viewer = document.getElementById("receipt-viewer");
+  var frame = document.getElementById("receipt-frame");
+  document.querySelectorAll("a.rcard").forEach(function (card) {
+    card.addEventListener("click", function (e) {
+      e.preventDefault();
+      var href = card.getAttribute("href");
+      if (viewer.classList.contains("on") && frame.getAttribute("src") === href) {
+        viewer.classList.remove("on");
+        return;
+      }
+      frame.setAttribute("src", href);
+      document.getElementById("viewer-pop").setAttribute("href", href);
+      document.getElementById("viewer-title").textContent = card.querySelector("h3").textContent;
+      viewer.classList.add("on");
+      viewer.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+  });
+  document.getElementById("viewer-close").addEventListener("click", function () {
+    viewer.classList.remove("on");
+  });
+
   var button = document.getElementById("run-agent");
   if (!button) return;
   var log = document.getElementById("run-log");
@@ -358,6 +430,27 @@ export function createApp(options: AppOptions): Hono {
   var STAGE = { 1: "server", 2: "server", 3: "agent", 4: "facilitator", 5: "chain", 6: "mirror", 7: "agent", 8: "hcs" };
   function esc(text) { return text.replace(/[&<>"']/g, function (ch) { return "&#" + ch.charCodeAt(0) + ";"; }); }
   function linkify(html) { return html.replace(/https?:\\/\\/[^\\s<]+/g, function (url) { return '<a href="' + url + '" target="_blank">' + url + "</a>"; }); }
+  var approvalToggle = document.getElementById("approval-toggle");
+  var panel = document.getElementById("approve-panel");
+  var terms = document.getElementById("approve-terms");
+  function humanChip() { return document.querySelector('[data-rail="human"]'); }
+  function decide(approve) {
+    panel.classList.remove("on");
+    fetch("/demo/approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ approve: approve }),
+    });
+  }
+  document.getElementById("approve-yes").addEventListener("click", function () { decide(true); });
+  document.getElementById("approve-no").addEventListener("click", function () { decide(false); });
+  var proofUrl = null;
+  function syncHumanStage() {
+    var rails = document.querySelector(".rails");
+    if (rails) rails.classList.toggle("with-human", approvalToggle.checked);
+  }
+  approvalToggle.addEventListener("change", syncHumanStage);
+  syncHumanStage();
   button.addEventListener("click", function () {
     button.disabled = true;
     button.textContent = "Running the agent…";
@@ -366,8 +459,11 @@ export function createApp(options: AppOptions): Hono {
     statusText.textContent = "Running in the background…";
     log.style.display = "block";
     log.innerHTML = "";
-    document.querySelectorAll("[data-rail]").forEach(function (chip) { chip.classList.remove("lit"); });
-    var events = new EventSource("/demo/run");
+    document.querySelectorAll("[data-rail]").forEach(function (chip) { chip.classList.remove("lit", "wait"); });
+    proofUrl = null;
+    panel.classList.remove("on");
+    approvalToggle.disabled = true;
+    var events = new EventSource("/demo/run" + (approvalToggle.checked ? "?approval=1" : ""));
     events.addEventListener("line", function (event) {
       log.innerHTML += linkify(esc(event.data)) + "\\n";
       log.scrollTop = log.scrollHeight;
@@ -376,18 +472,44 @@ export function createApp(options: AppOptions): Hono {
         var chip = document.querySelector('[data-rail="' + STAGE[step[1]] + '"]');
         if (chip) chip.classList.add("lit");
       }
+      if (event.data.indexOf("AWAITING HUMAN APPROVAL") !== -1) {
+        humanChip().classList.add("wait");
+        terms.textContent = event.data.replace(/^.*AWAITING HUMAN APPROVAL — /, "").replace(/ \\(y\\/N\\)$/, "");
+        panel.classList.add("on");
+        statusText.textContent = "Paused — the agent is waiting for YOUR approval.";
+      }
+      if (event.data.indexOf("approved by human") !== -1) {
+        humanChip().classList.remove("wait");
+        humanChip().classList.add("lit");
+        panel.classList.remove("on");
+        statusText.textContent = "Approved — the agent takes it from here…";
+      }
+      if (event.data.indexOf("declined by human") !== -1) {
+        humanChip().classList.remove("wait");
+        panel.classList.remove("on");
+      }
+      var proof = event.data.match(/hashscan: (https?:\\/\\/\\S+)/);
+      if (proof) proofUrl = proof[1];
     });
     events.addEventListener("done", function () {
       events.close();
       button.disabled = false;
+      approvalToggle.disabled = false;
+      panel.classList.remove("on");
       button.textContent = label;
       status.className = "status on done";
       statusText.textContent = "Complete — settlement finished. See the receipt below.";
+      if (proofUrl) {
+        hint.innerHTML =
+          'Settled — <a href="' + esc(proofUrl) + '" target="_blank">check the transaction on HashScan ↗</a>';
+      }
       hint.style.display = "block";
     });
     events.onerror = function () {
       events.close();
       button.disabled = false;
+      approvalToggle.disabled = false;
+      panel.classList.remove("on");
       button.textContent = label;
       status.className = "status on err";
       statusText.textContent = "Run ended — the stream closed (see the log above).";
@@ -401,6 +523,7 @@ export function createApp(options: AppOptions): Hono {
   // process holding its own key) and streams its numbered narration back
   // as server-sent events. One run at a time — settlements are real.
   let agentRunning = false;
+  let pendingDecision: ((approve: boolean) => void) | undefined;
   app.get("/demo/run", (c) => {
     const runAgent = options.runAgent;
     if (runAgent === undefined) {
@@ -410,7 +533,9 @@ export function createApp(options: AppOptions): Hono {
       return c.json({ error: "a run is already in progress — one settlement at a time" }, 409);
     }
     agentRunning = true;
-    const lines = createInterface({ input: runAgent() });
+    const run = runAgent({ humanApproval: c.req.query("approval") === "1" });
+    pendingDecision = run.decide;
+    const lines = createInterface({ input: run.narration });
     return streamSSE(c, async (sse) => {
       try {
         for await (const line of lines) {
@@ -419,8 +544,26 @@ export function createApp(options: AppOptions): Hono {
         await sse.writeSSE({ event: "done", data: "run complete" });
       } finally {
         agentRunning = false;
+        pendingDecision = undefined;
       }
     });
+  });
+
+  // The hub's Approve/Decline buttons land here; the answer is relayed to
+  // the paused agent's stdin. The gate itself lives in the agent — this
+  // endpoint is only transport, so a curl can approve just as well.
+  app.post("/demo/approve", async (c) => {
+    if (options.runAgent === undefined) {
+      return c.json({ error: "live runs are disabled here — no agent runner attached" }, 501);
+    }
+    const decide = pendingDecision;
+    if (!agentRunning || decide === undefined) {
+      return c.json({ error: "no approval pending — start a run with approval on" }, 409);
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { approve?: boolean };
+    pendingDecision = undefined;
+    decide(body.approve === true);
+    return c.json({ ok: true });
   });
 
   // The demo's receipt artifacts, served when present (written by the agent

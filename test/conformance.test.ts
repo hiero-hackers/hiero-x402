@@ -149,6 +149,43 @@ describe("the demo hub (/ui)", () => {
 
   it("/demo/run answers 501 honestly when no agent runner is attached", async () => {
     expect((await app.request("/demo/run")).status).toBe(501);
+    expect((await app.request("/demo/approve", { method: "POST" })).status).toBe(501);
+  });
+
+  it("/demo/approve relays the human's decision to the paused run's gate", async () => {
+    const decisions: boolean[] = [];
+    let sawApproval = false;
+    const withRunner = createApp({
+      network: "hedera:testnet",
+      payTo: PAY_TO,
+      facilitatorUrl,
+      checkoutBase: "https://hiero-hackers.github.io/hiero-checkout/",
+      verifyBeforeServe: false,
+      runAgent: ({ humanApproval }) => {
+        sawApproval = humanApproval;
+        return {
+          narration: Readable.from("[agent] 2½ · AWAITING HUMAN APPROVAL\n"),
+          decide: (approve) => decisions.push(approve),
+        };
+      },
+    });
+    // No run yet → nothing to approve.
+    expect((await withRunner.request("/demo/approve", { method: "POST" })).status).toBe(409);
+    const streaming = withRunner.request("/demo/run?approval=1");
+    // Approve while the stream is up, before it drains.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const approve = await withRunner.request("/demo/approve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ approve: true }),
+    });
+    expect(approve.status).toBe(200);
+    expect(decisions).toEqual([true]);
+    expect(sawApproval).toBe(true);
+    await (await streaming).text(); // drain; the finally releases the lock
+    // After the run, the gate is gone again.
+    expect((await withRunner.request("/demo/approve", { method: "POST" })).status).toBe(409);
+    await new Promise((resolve) => setTimeout(resolve, 150));
   });
 
   it("/demo/run streams an injected agent narration as SSE and releases the lock", async () => {
@@ -158,7 +195,9 @@ describe("the demo hub (/ui)", () => {
       facilitatorUrl,
       checkoutBase: "https://hiero-hackers.github.io/hiero-checkout/",
       verifyBeforeServe: false,
-      runAgent: () => Readable.from("[agent] 1 · GET /data/spot-price\n[agent] 6 · VERIFYING\n"),
+      runAgent: () => ({
+        narration: Readable.from("[agent] 1 · GET /data/spot-price\n[agent] 6 · VERIFYING\n"),
+      }),
     });
     const response = await withRunner.request("/demo/run");
     expect(response.status).toBe(200);

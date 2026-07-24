@@ -7,32 +7,45 @@
  * This process holds no keys.
  */
 import { spawn } from "node:child_process";
-import { PassThrough, type Readable } from "node:stream";
+import { PassThrough } from "node:stream";
 import { serve } from "@hono/node-server";
-import { CATALOG, SERVER_PORT, demoNetwork, requireEnv } from "./shared.js";
-import { createApp } from "./app.js";
+import { CATALOG, SERVER_PORT, confirmPayToAccount, demoNetwork, requireEnv } from "./shared.js";
+import { createApp, type AgentRun } from "./app.js";
 
 // The hub's Run button. The agent stays its OWN process reading its OWN
 // key from .env — this server process still never holds a key; it only
-// relays the child's narration to the dashboard.
-function runAgent(): Readable {
+// relays the child's narration to the dashboard. In human-approval mode the
+// child pauses on its stdin at step 2½; `decide` writes the hub's answer
+// there — the approval is transport, the GATE lives in the agent.
+function runAgent({ humanApproval }: { humanApproval: boolean }): AgentRun {
   const output = new PassThrough();
   const child = spawn("node_modules/.bin/tsx", ["--env-file=.env", "demo/agent.ts"], {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [humanApproval ? "pipe" : "ignore", "pipe", "pipe"],
     // The agent must pay THIS server, whatever port it's on. Real env wins
     // over --env-file, so this override holds even if .env sets SERVER_URL.
-    env: { ...process.env, SERVER_URL: `http://localhost:${SERVER_PORT}` },
+    env: {
+      ...process.env,
+      SERVER_URL: `http://localhost:${SERVER_PORT}`,
+      ...(humanApproval ? { HUMAN_APPROVAL: "1" } : {}),
+    },
   });
-  child.stdout.pipe(output, { end: false });
-  child.stderr.pipe(output, { end: false });
+  child.stdout?.pipe(output, { end: false });
+  child.stderr?.pipe(output, { end: false });
   child.on("close", (code) => {
     output.end(`[agent] process exited with code ${String(code)}\n`);
   });
-  return output;
+  if (!humanApproval) return { narration: output };
+  return {
+    narration: output,
+    decide: (approve): void => {
+      child.stdin?.write(approve ? "y\n" : "n\n");
+    },
+  };
 }
 
 const NETWORK = demoNetwork();
 const PAY_TO = requireEnv("PAY_TO_ACCOUNT");
+await confirmPayToAccount(PAY_TO); // refuses a payTo that can never settle (receiver-sig trap)
 const VERIFY_BEFORE_SERVE = process.env.VERIFY_BEFORE_SERVE === "1";
 const FACILITATOR_URL = process.env.FACILITATOR_URL ?? "http://localhost:4020";
 

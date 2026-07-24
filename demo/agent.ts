@@ -3,6 +3,12 @@
  * The agent — the bounty's protagonist: no API key, no subscription, no human
  * in the loop. And this repo's thesis on top: **no blind trust either.**
  *
+ * One opt-in twist for demos: `HUMAN_APPROVAL=1` pauses at step 2½ — terms
+ * known, nothing signed — until a human answers on stdin (y/N in a terminal,
+ * or the hub's Approve button, which the server relays to this child's
+ * stdin). The agent still drives every step; the human only approves the
+ * money leaving. Declining exits before a single byte is signed.
+ *
  * The x402 steps are spelled out (request → 402 → sign → retry → 200) rather
  * than hidden in a fetch wrapper, because the demo IS the explanation. After
  * the paid response arrives, the agent does what neither reference
@@ -14,6 +20,7 @@
  * only — the gate refuses anything else before a single byte is signed.
  */
 import { writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { createClientHederaSigner } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
@@ -63,6 +70,28 @@ console.log(
     `(feePayer ${String(accepted.extra?.feePayer)} sponsors the network fee)`,
 );
 
+if (process.env.HUMAN_APPROVAL === "1") {
+  console.log(
+    `[agent] 2½ · AWAITING HUMAN APPROVAL — pay ${accepted.amount} tinybar of ${accepted.asset} ` +
+      `to ${accepted.payTo} for ${RESOURCE}? (y/N)`,
+  );
+  const approved = await new Promise<boolean>((resolve) => {
+    const prompt = createInterface({ input: process.stdin });
+    prompt.once("line", (line) => {
+      // Resolve BEFORE close(): close() emits "close" synchronously, and the
+      // EOF fallback below would otherwise win the race and read as decline.
+      resolve(/^y(es)?$/i.test(line.trim()));
+      prompt.close();
+    });
+    prompt.once("close", () => resolve(false)); // stdin EOF with no answer
+  });
+  if (!approved) {
+    console.log("[agent] 2½ · declined by human — nothing signed, nothing spent");
+    process.exit(3);
+  }
+  console.log("[agent] 2½ · approved by human — the agent takes it from here");
+}
+
 console.log("[agent] 3 · signing the transfer (partially — the fee payer signs last)");
 const payload = await httpClient.createPaymentPayload(paymentRequired);
 
@@ -93,7 +122,7 @@ const verdict = await verifySettlement(
   },
 );
 console.log(`[agent]     ${verdictLine(verdict)}`);
-if (verdict.hashscanUrl !== undefined) console.log(`[agent]     proof: ${verdict.hashscanUrl}`);
+if (verdict.hashscanUrl !== undefined) console.log(`[agent]     hashscan: ${verdict.hashscanUrl}`);
 if (verdict.mirrorUrl !== undefined) console.log(`[agent]     mirror record: ${verdict.mirrorUrl}`);
 
 // The path is the operator's own env choice, not request-derived input.
