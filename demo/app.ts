@@ -16,6 +16,7 @@
  */
 import { Buffer } from "node:buffer";
 import { PublicKey } from "@hiero-ledger/sdk";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
@@ -91,9 +92,38 @@ export interface AgentRun {
   readonly decide?: (approve: boolean, consent?: string) => void;
 }
 
+/** One pause's approval challenge: what the wallet signs, and why it can be
+ *  signed exactly once. */
+interface PendingChallenge {
+  /** The agent's own terms line, verbatim — the human-readable part. */
+  readonly terms: string;
+  readonly nonce: string;
+  readonly issued: string;
+  /** The full string presented to the wallet and verified on return. */
+  readonly challenge: string;
+}
+
 /**
- * Does `signature` (base64) verify as the approver's key over the terms the
- * paused agent printed? Tries the raw bytes and the legacy
+ * Mint the string a wallet must sign for THIS pause. The agent's terms line
+ * is identical on every run of the same product, so signing it alone would
+ * make a captured signature approve every future run — and the attestation
+ * would then record a human consenting to a payment they never saw. The
+ * nonce is fresh per pause, single-use, and dies with the run.
+ */
+function mintChallenge(terms: string): PendingChallenge {
+  const nonce = randomBytes(16).toString("hex");
+  const issued = new Date().toISOString();
+  return {
+    terms,
+    nonce,
+    issued,
+    challenge: `hiero-x402 approval · ${terms} · nonce ${nonce} · issued ${issued}`,
+  };
+}
+
+/**
+ * Does `signature` (base64) verify as the approver's key over the challenge
+ * the hub minted for this pause? Tries the raw bytes and the legacy
  * "Hedera Signed Message" prefix some wallets apply — either is the same
  * human consenting to the same terms.
  */
@@ -597,7 +627,6 @@ export function createApp(options: AppOptions): Hono {
       if (event.data.indexOf("AWAITING HUMAN APPROVAL") !== -1) {
         humanChip().classList.add("wait");
         var shown = event.data.replace(/^.*AWAITING HUMAN APPROVAL — /, "").replace(/\\? \\(y\\/N\\)$/, "");
-        pausedTerms = shown;
         terms.textContent = shown;
         panel.classList.add("on");
         statusText.textContent = "Paused — the agent is waiting for YOUR approval.";
@@ -614,6 +643,11 @@ export function createApp(options: AppOptions): Hono {
       }
       var proof = event.data.match(/hashscan: (https?:\\/\\/\\S+)/);
       if (proof) proofUrl = proof[1];
+    });
+    // The hub's one-time challenge for this pause — signed verbatim, never
+    // the bare terms line (which repeats run to run and would replay).
+    events.addEventListener("challenge", function (event) {
+      pausedTerms = event.data;
     });
     events.addEventListener("done", function () {
       events.close();
@@ -648,7 +682,7 @@ export function createApp(options: AppOptions): Hono {
   // as server-sent events. One run at a time — settlements are real.
   let agentRunning = false;
   let pendingDecision: ((approve: boolean, consent?: string) => void) | undefined;
-  let pendingTerms: string | undefined;
+  let pendingChallenge: PendingChallenge | undefined;
   app.get("/demo/run", (c) => {
     const runAgent = options.runAgent;
     if (runAgent === undefined) {
@@ -664,16 +698,20 @@ export function createApp(options: AppOptions): Hono {
     return streamSSE(c, async (sse) => {
       try {
         for await (const line of lines) {
-          // The paused terms, verbatim — exactly what a wallet must sign.
-          const paused = line.match(/AWAITING HUMAN APPROVAL — (.+)\? \(y\/N\)$/);
-          if (paused !== null) pendingTerms = paused[1];
+          const paused = line.match(/AWAITING HUMAN APPROVAL — (?<terms>.+)\? \(y\/N\)$/);
           await sse.writeSSE({ event: "line", data: line });
+          if (paused?.groups?.terms !== undefined) {
+            // The wallet signs this, not the bare terms — one pause, one nonce.
+            const challenge = mintChallenge(paused.groups.terms);
+            pendingChallenge = challenge;
+            await sse.writeSSE({ event: "challenge", data: challenge.challenge });
+          }
         }
         await sse.writeSSE({ event: "done", data: "run complete" });
       } finally {
         agentRunning = false;
         pendingDecision = undefined;
-        pendingTerms = undefined;
+        pendingChallenge = undefined;
       }
     });
   });
@@ -696,13 +734,14 @@ export function createApp(options: AppOptions): Hono {
     };
     if (body.signature !== undefined) {
       // Wallet-signed consent: cryptographic approval, verified against the
-      // approver's on-chain key over the exact terms the agent printed.
+      // approver's on-chain key over the exact challenge the hub minted.
       const approver = options.approver;
       if (approver === undefined) {
         return c.json({ error: "no approver configured — wallet approvals are off" }, 501);
       }
-      if (pendingTerms === undefined) {
-        return c.json({ error: "no terms pending — nothing to sign yet" }, 409);
+      const challenge = pendingChallenge;
+      if (challenge === undefined) {
+        return c.json({ error: "no challenge pending — nothing to sign yet" }, 409);
       }
       if (body.accountId !== approver.accountId) {
         return c.json(
@@ -710,19 +749,22 @@ export function createApp(options: AppOptions): Hono {
           403,
         );
       }
-      if (!verifyConsent(approver.publicKey, pendingTerms, body.signature)) {
+      if (!verifyConsent(approver.publicKey, challenge.challenge, body.signature)) {
         return c.json(
           { error: "signature did not verify against the approver's on-chain key" },
           403,
         );
       }
+      // `terms` carries the nonce and issue time, so an auditor holding only
+      // the attestation can re-verify the signature from the record itself.
       const consent = Buffer.from(
         JSON.stringify({
           accountId: body.accountId,
-          terms: pendingTerms,
+          terms: challenge.challenge,
           signature: body.signature,
         }),
       ).toString("base64");
+      pendingChallenge = undefined; // single use
       pendingDecision = undefined;
       decide(true, consent);
       return c.json({ ok: true, verified: true });
