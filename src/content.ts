@@ -31,7 +31,9 @@ export const CONTENT_SIGNATURE_HEADER = "x-content-signature";
 /** The facts a commitment binds together. */
 export interface ContentCommitment {
   readonly v: typeof CONTENT_COMMITMENT_VERSION;
-  /** The settlement transaction id, exactly as the settlement header named it. */
+  /** The settlement transaction id, REST-normalized (`0.0.x-seconds-nanos`)
+   *  — the ONE canonical form, shared with verdicts, mirror links, and
+   *  topic attestations, so any of them can rebuild this exact message. */
   readonly transactionId: string;
   /** The paid resource — the same `reference` the payment terms carried. */
   readonly reference: string;
@@ -94,6 +96,11 @@ export function parseContentCommitment(message: string): ContentCommitment | und
 export interface DeliveredContent {
   /** sha-256 (hex) of the exact bytes the agent received. */
   readonly sha256: string;
+  /** The reference EXACTLY as the commitment message named it (the route
+   *  path) — which can differ from a settlement reference (often a full
+   *  URL). Carried so downstream artifacts (receipts, attestations) can
+   *  rebuild the signed bytes without guessing which form was signed. */
+  readonly reference?: string;
   /** Present when the server presented a commitment. */
   readonly commitment?: {
     /** The signing account, as the `x-content-signer` header named it. */

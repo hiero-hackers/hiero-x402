@@ -32,6 +32,7 @@ import {
   CONTENT_SIGNER_HEADER,
   MIRROR_HOSTS,
   contentCommitmentMessage,
+  restTransactionId,
   sha256Hex,
   toPaymentRequirements,
   verifySettlement,
@@ -343,6 +344,8 @@ export function createApp(options: AppOptions): Hono {
   .viewer-bar a{color:var(--brand-soft)}
   .viewer-bar button{background:none;border:none;color:var(--muted);font-size:1rem;cursor:pointer;padding:.1rem .4rem;line-height:1}
   .viewer-bar button:hover{color:var(--text)}
+  /* The frame grows to the receipt's full height (script below measures the
+     same-origin document) — the page scrolls, the receipt never does. */
   .viewer iframe{display:block;width:100%;height:34rem;border:0;background:#fff}
   .rcard.empty .open{color:var(--faint)}
   @media(max-width:600px){.receipts{grid-template-columns:1fr}}
@@ -373,6 +376,7 @@ export function createApp(options: AppOptions): Hono {
         <span class="rail" data-rail="facilitator">facilitator · fee-payer key</span><span class="arrow">→</span>
         <span class="rail" data-rail="chain">Hedera testnet</span><span class="arrow">→</span>
         <span class="rail" data-rail="mirror">mirror verify</span><span class="arrow">→</span>
+        <span class="rail" data-rail="content">content commit</span><span class="arrow">→</span>
         <span class="rail" data-rail="hcs">HCS attest</span>
       </div>
       ${
@@ -409,7 +413,7 @@ export function createApp(options: AppOptions): Hono {
           "mirror",
           "Mirror receipt",
           "Mirror receipt",
-          "The public mirror node's attested record of the settlement — independent of the facilitator, and re-checkable by anyone.",
+          "The public mirror node's attested record of the settlement — independent of the facilitator, and re-checkable by anyone. Includes the delivered-content panel: what the server committed to serving for this payment.",
         )}
         ${receiptCard(
           "verified-receipt.html",
@@ -433,8 +437,8 @@ export function createApp(options: AppOptions): Hono {
       <h2>Audit trail</h2>
       <p style="margin:0;font-size:.92rem;color:var(--muted)">${
         topic !== "" && topic !== "create"
-          ? `Verdicts attested to HCS topic <a href="https://hashscan.io/testnet/topic/${esc(topic)}"><code>${esc(topic)}</code></a> — an append-only public log.`
-          : `Set <code>ATTEST_TOPIC_ID</code> to attest verdicts to a public HCS topic.`
+          ? `Verdicts attested to HCS topic <a href="https://hashscan.io/testnet/topic/${esc(topic)}"><code>${esc(topic)}</code></a> — an append-only public log. Each attestation carries the content hash and the server&#39;s commitment signature, so <code>npm run audit</code> re-verifies every payment&#39;s delivered bytes straight from the mirror — no cooperation needed from agent, server, or facilitator.`
+          : `Set <code>ATTEST_TOPIC_ID</code> to attest verdicts — settlement, content hash, and the server&#39;s commitment signature — to a public HCS topic anyone can re-verify with <code>npm run audit</code>.`
       }</p>
     </section>
   </div>
@@ -449,6 +453,22 @@ export function createApp(options: AppOptions): Hono {
   // Inline receipt viewer — the demo stays on this screen.
   var viewer = document.getElementById("receipt-viewer");
   var frame = document.getElementById("receipt-frame");
+  // Size the frame to the WHOLE receipt: same-origin, so its height is
+  // measurable. Re-measure a few times while fonts/styles settle.
+  function fitFrame() {
+    try {
+      var doc = frame.contentDocument;
+      if (!doc || !doc.documentElement) return;
+      var height = Math.max(doc.documentElement.scrollHeight, doc.body ? doc.body.scrollHeight : 0);
+      if (height > 0) frame.style.height = height + "px";
+    } catch (e) { /* cross-origin or not ready — keep the fallback height */ }
+  }
+  frame.addEventListener("load", function () {
+    fitFrame();
+    setTimeout(fitFrame, 150);
+    setTimeout(fitFrame, 600);
+  });
+  window.addEventListener("resize", fitFrame);
   document.querySelectorAll("a.rcard").forEach(function (card) {
     card.addEventListener("click", function (e) {
       e.preventDefault();
@@ -589,6 +609,13 @@ export function createApp(options: AppOptions): Hono {
     events.addEventListener("line", function (event) {
       log.innerHTML += linkify(esc(event.data)) + "\\n";
       log.scrollTop = log.scrollHeight;
+      // Step 6½ — the content commitment. Light the rail only when the
+      // server actually committed; an uncommitted run leaves it dark, the
+      // same honesty as the receipt's registers.
+      if (event.data.indexOf("[agent] 6\\u00bd \\u00b7 content COMMITTED") === 0) {
+        var contentChip = document.querySelector('[data-rail="content"]');
+        if (contentChip) contentChip.classList.add("lit");
+      }
       var step = event.data.match(/^\\[agent\\] (\\d)/);
       if (step && STAGE[step[1]]) {
         var chip = document.querySelector('[data-rail="' + STAGE[step[1]] + '"]');
@@ -785,7 +812,11 @@ export function createApp(options: AppOptions): Hono {
           transaction?: unknown;
         };
         if (typeof decoded.transaction !== "string" || decoded.transaction === "") return;
-        transactionId = decoded.transaction;
+        // Sign the REST-normalized id — the ONE canonical form. It is what
+        // the verdict, the mirror links, and the topic attestations all
+        // carry, so an auditor can rebuild this exact message from the log
+        // alone, no SDK-form reconstruction (and its nanos-padding traps).
+        transactionId = restTransactionId(decoded.transaction);
       } catch {
         return; // a settlement header this process can't read is not ours to sign
       }

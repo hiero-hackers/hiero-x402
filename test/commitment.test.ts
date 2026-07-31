@@ -31,6 +31,9 @@ const PAY_TO = "0.0.4507290";
 const AGENT = "0.0.4507291";
 const SIGNER = "0.0.7000009";
 const SETTLEMENT_ID = `${FEE_PAYER}@1753099999.123456789`;
+// What the server actually signs: the REST-normalized form of the id — the
+// one canonical spelling shared by verdicts, mirror links, and attestations.
+const SETTLEMENT_ID_REST = `${FEE_PAYER}-1753099999-123456789`;
 
 const signerKey = PrivateKey.generateED25519();
 const agentKey = PrivateKey.generateED25519();
@@ -133,7 +136,7 @@ describe("content commitment on the paid wire", () => {
     // …and the signature verifies over (txId, reference, hash) with the
     // signer's PUBLIC key — precisely what the agent checks via the mirror.
     const message = contentCommitmentMessage({
-      transactionId: SETTLEMENT_ID,
+      transactionId: SETTLEMENT_ID_REST,
       reference: RESOURCE,
       sha256: sha256Hex(bytes),
     });
@@ -143,7 +146,7 @@ describe("content commitment on the paid wire", () => {
     ).toBe(true);
     // A different transaction id must NOT verify — the binding is per-payment.
     const wrongTx = contentCommitmentMessage({
-      transactionId: `${FEE_PAYER}@1753099999.999999999`,
+      transactionId: `${FEE_PAYER}-1753099999-999999999`,
       reference: RESOURCE,
       sha256: sha256Hex(bytes),
     });

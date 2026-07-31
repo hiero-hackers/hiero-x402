@@ -186,14 +186,19 @@ const contentSha = sha256Hex(receivedBytes);
 const commitSha = paid.headers.get(CONTENT_SHA256_HEADER);
 const commitSigner = paid.headers.get(CONTENT_SIGNER_HEADER);
 const commitSignature = paid.headers.get(CONTENT_SIGNATURE_HEADER);
-let content: DeliveredContent = { sha256: contentSha };
+// `reference: RESOURCE` is the route path — the form the server SIGNS —
+// not the full settlement URL; artifacts downstream carry it so the exact
+// signed bytes stay rebuildable from any of them.
+let content: DeliveredContent = { sha256: contentSha, reference: RESOURCE };
 if (commitSha !== null && commitSigner !== null && commitSignature !== null) {
   const committed =
     commitSha === contentSha &&
     (await verifyAccountSignature(
       commitSigner,
       contentCommitmentMessage({
-        transactionId: settle.transaction,
+        // The canonical REST-normalized id — the same form the server
+        // signed, the verdict carries, and the topic attestation records.
+        transactionId: verdict.transactionId,
         reference: RESOURCE,
         sha256: contentSha,
       }),
@@ -201,6 +206,7 @@ if (commitSha !== null && commitSigner !== null && commitSignature !== null) {
     ));
   content = {
     sha256: contentSha,
+    reference: RESOURCE,
     commitment: { signer: commitSigner, signatureB64: commitSignature, verified: committed },
   };
   console.log(
@@ -229,6 +235,7 @@ if (ATTEST_TOPIC_ID !== "") {
       ATTEST_TOPIC_ID,
       { accountId: ACCOUNT_ID, key: AGENT_KEY },
       humanConsent,
+      content, // the (transaction → content hash) binding, public and timestamped
     );
     console.log(`[agent] 8 · verdict attested to HCS topic ${result.topicId}`);
     console.log(`[agent]     audit log: ${result.hashscanTopicUrl}`);
