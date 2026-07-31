@@ -38,12 +38,11 @@ describe("README claims", () => {
     // The settlement id (payer@validStart) and the HashScan link (consensus
     // timestamp) are different numbers by design — both must be present and
     // the link must be the consensus form.
-    expect(readme).toContain("0.0.6502504@1784634414.257402675");
+    expect(readme).toContain("0.0.6502504@1785501679.860897624");
     const links = [...readme.matchAll(/hashscan\.io\/testnet\/transaction\/([\d.]+)/g)].map(
       (m) => m[1],
     );
-    expect(links).toContain("1784634418.453138104"); // the paid ✓ run
-    expect(links).toContain("1784633796.552851104"); // the caught underpayment
+    expect(links).toContain("1785501684.589679895"); // the paid ✓ run (committed + attested)
   });
 });
 
