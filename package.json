@@ -1,6 +1,6 @@
 {
   "name": "@hiero-hackers/hiero-x402",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "x402 on Hiero with verifiable settlement and receipts. The official @x402 packages move the money; this repo proves it moved — an independent, facilitator-free settlement check and a receipt artifact for every payment an agent makes. Prototype.",
   "type": "module",
   "license": "Apache-2.0",
