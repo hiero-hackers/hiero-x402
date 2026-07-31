@@ -330,23 +330,20 @@ export function createApp(options: AppOptions): Hono {
 </style>
 <div class="wrap">
   <div class="topbar">
-    <div class="brand"><span class="mark">x4</span>hiero-x402 <small>settlement, verified</small></div>
+    <div class="brand"><span class="mark"></span>hiero-x402 <small>settlement, verified and optionally human gated</small></div>
     <span class="pill"><span class="dot"></span>network&nbsp;<code>${esc(network)}</code></span>
   </div>
 
   <header class="hero">
-    <p class="eyebrow">HTTP 402 · verifiable settlement on Hiero</p>
-    <h1>Settlement you don't have to trust.</h1>
-    <p>Mock market data behind HTTP&nbsp;402. An agent discovers the price and pays —
-    fully autonomously, or pausing for a human to approve the spend (hub button or a
-    wallet-signed consent) — and every settlement is independently verified against
-    the ledger, not the facilitator's word.</p>
+    <p class="eyebrow">HTTP 402 · verifiable and trustworthy settlement on Hedera</p>
+    <h1>Trusted Layer of AI settlement.</h1>
+    <p>An agent discovers a x402 price on Hedera, pays it, and the settlement arrives as a mirror receipt or block proof (beta) - all independently verifiable.
+    The transaction can be fully autonomous or with a human in the loop (hub button or wallet-signed consent).</p>
   </header>
 
   <div class="grid">
     <section class="card">
       <h2>Live end-to-end — the agent rails</h2>
-      <p class="sub">One click runs the agent as its own process; each stage lights up as the settlement advances.</p>
       <div class="rails">
         <span class="rail" data-rail="agent">agent · client key</span><span class="arrow">→</span>
         <span class="rail" data-rail="server">server · no keys</span><span class="arrow">→</span>
@@ -360,14 +357,14 @@ export function createApp(options: AppOptions): Hono {
         options.runAgent !== undefined
           ? `<div class="toggle-group" id="mode-group">
                <label class="toggle"><input type="radio" name="run-mode" value="auto" checked><span>autonomous — no human in the loop</span></label>
-               <label class="toggle"><input type="radio" name="run-mode" value="button"><span>pause for approval — <b>hub button</b></span></label>
+               <label class="toggle"><input type="radio" name="run-mode" value="button"><span>require human approval — <b>hub button</b></span></label>
                ${
                  options.approver !== undefined && options.walletProjectId !== undefined
-                   ? `<label class="toggle"><input type="radio" name="run-mode" value="wallet"><span>pause for approval — <b>wallet-signed</b> by ${esc(options.approver.accountId)}</span></label>`
+                   ? `<label class="toggle"><input type="radio" name="run-mode" value="wallet"><span>require human approval — <b>wallet-signed</b> </span></label>`
                    : `<span class="note">wallet-signed approval is off — set APPROVER_ACCOUNT_ID and WALLETCONNECT_PROJECT_ID in .env</span>`
                }
              </div>
-             <button id="run-agent" class="btn">▶ Run the agent — pays real testnet HBAR</button>
+             <button id="run-agent" class="btn">▶ Run the agent — testnet</button>
              <div id="approve-panel" class="approve">
                <span class="terms" id="approve-terms"></span>
                <button id="approve-wallet" class="btn" style="display:none">🔏 Sign approval in wallet</button>
@@ -383,21 +380,21 @@ export function createApp(options: AppOptions): Hono {
 
     <section class="card">
       <h2>Receipts — the proof you keep</h2>
-      <p class="sub">This is the point of the project: every run ends in a receipt anyone can re-check — settlement you don't have to take on trust. Two rungs of the same ladder.</p>
+      <p class="sub">View the mirror receipt or block proof for each AI agent settlement.</p>
       <div class="receipts">
         ${receiptCard(
           "receipt.html",
           "mirror",
           "Mirror receipt",
           "Mirror receipt",
-          "The public mirror node's attested record of the settlement — independent of the facilitator, and re-checkable by anyone. Links straight to the raw mirror-node JSON.",
+          "The public mirror node's attested record of the settlement — independent of the facilitator, and re-checkable by anyone.",
         )}
         ${receiptCard(
           "verified-receipt.html",
           "verified",
           "Block proof",
           "Verified settlement",
-          "The ledger's own block proof — recomputed and checked before a single field is believed. Cryptography, not attestation: the only receipt we call verified.",
+          "The ledger's own (beta) block proof — recomputed and checked independently. Cryptography, not attestation: the only receipt we call verified.",
         )}
       </div>
       <div id="receipt-viewer" class="viewer">
@@ -421,7 +418,7 @@ export function createApp(options: AppOptions): Hono {
   </div>
 
   <footer>
-    <span>hiero-x402 · x402 on Hiero with verifiable settlement</span>
+    <span>hiero-x402 · x402 on Hiero with verifiable settlement and human approval</span>
     <span>independent · facilitator-free verification</span>
   </footer>
 </div>
