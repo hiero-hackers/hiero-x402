@@ -18,6 +18,10 @@ export interface HubView {
   readonly topic: string;
   /** Is this artifact from THIS session? (see createApp's freshReceipt) */
   readonly receiptFresh: (file: string) => boolean;
+  /** When the fresh artifact was written (HH:MM:SS), for the card label —
+   *  so a receipt from an earlier run this session never reads as the
+   *  latest run's output (a declined run writes nothing). */
+  readonly receiptStamp: (file: string) => string | undefined;
 }
 
 export function hubHTML(view: HubView): string {
@@ -38,8 +42,9 @@ export function hubHTML(view: HubView): string {
     // the demo" alone left the block-proof slot looking broken when only
     // the agent had run.
     const fillsIt = kind === "verified" ? "npm run provenance" : "run the agent";
+    const stamp = view.receiptStamp(file);
     return view.receiptFresh(file)
-      ? `<a class="rcard ${kind}" data-name="${name}" href="/receipts/${name}">${inner}<span class="open">Open receipt ↓</span></a>`
+      ? `<a class="rcard ${kind}" data-name="${name}" href="/receipts/${name}">${inner}<span class="open">Open receipt ↓${stamp !== undefined ? ` · written ${stamp}` : ""}</span></a>`
       : `<div class="rcard ${kind} empty" data-name="${name}">${inner}<span class="open">none from this session yet — ${fillsIt}</span></div>`;
   };
   return `<!doctype html>
@@ -210,6 +215,7 @@ export function hubHTML(view: HubView): string {
         <span class="rail" data-rail="chain">Hedera testnet</span><span class="arrow">→</span>
         <span class="rail" data-rail="mirror">mirror verify</span><span class="arrow">→</span>
         <span class="rail" data-rail="content">content commit</span><span class="arrow">→</span>
+        <span class="rail" data-rail="receipt">receipt</span><span class="arrow">→</span>
         <span class="rail" data-rail="hcs">HCS attest</span>
       </div>
       ${
@@ -223,6 +229,10 @@ export function hubHTML(view: HubView): string {
                    : `<span class="note">wallet-signed approval is off — set APPROVER_ACCOUNT_ID and WALLETCONNECT_PROJECT_ID in .env</span>`
                }
              </div>
+             <label class="toggle" style="margin-top:.6rem"><span>max spend, ℏ (optional):</span>
+               <input id="max-payment" type="text" inputmode="decimal" placeholder="e.g. 0.5"
+                 style="background:rgba(255,255,255,.04);border:1px solid var(--line-2);border-radius:7px;color:var(--text);font-family:var(--mono);font-size:.8rem;padding:.3rem .55rem;width:9.5rem">
+             </label>
              <button id="run-agent" class="btn">▶ Run the agent — testnet</button>
              <div id="approve-panel" class="approve">
                <span class="terms" id="approve-terms"></span>
@@ -256,6 +266,7 @@ export function hubHTML(view: HubView): string {
           "The ledger's own (beta) block proof — recomputed and checked independently. Cryptography, not attestation: the only receipt we call verified.",
         )}
       </div>
+      <button id="run-provenance" class="btn ghost" style="margin-top:1rem">🧾 Run the block-proof rung — real previewnet block, verified offline</button>
       <div id="receipt-viewer" class="viewer">
         <div class="viewer-bar">
           <span class="vtitle" id="viewer-title"></span>
@@ -341,12 +352,34 @@ export function hubHTML(view: HubView): string {
         link.className = card.className.replace(" empty", "");
         link.setAttribute("data-name", name);
         link.setAttribute("href", "/receipts/" + name);
-        link.innerHTML = card.innerHTML.replace(/<span class="open">[^<]*<\\/span>/, '<span class="open">Open receipt ↓</span>');
+        link.innerHTML = card.innerHTML.replace(/<span class="open">[^<]*<\\/span>/, '<span class="open">Open receipt ↓ · this run</span>');
         card.replaceWith(link);
         bindCard(link);
       }).catch(function () { /* next refresh retries */ });
     });
   }
+
+  // The block-proof rung, one click: the endpoint runs the same offline
+  // verification as npm run provenance; the fresh artifact lights its
+  // card, and the viewer opens on it — the demo's top rung without ever
+  // leaving this screen.
+  var provBtn = document.getElementById("run-provenance");
+  if (provBtn) provBtn.addEventListener("click", function () {
+    provBtn.disabled = true;
+    fetch("/demo/provenance", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        provBtn.disabled = false;
+        if (!body.ok) { provBtn.textContent = "block-proof run failed — see server logs"; return; }
+        refreshReceiptCards();
+        frame.setAttribute("src", "/receipts/verified-receipt");
+        document.getElementById("viewer-pop").setAttribute("href", "/receipts/verified-receipt");
+        document.getElementById("viewer-title").textContent = "Verified settlement — block proof";
+        viewer.classList.add("on");
+        viewer.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      })
+      .catch(function () { provBtn.disabled = false; });
+  });
 
   // The audit view: /demo/audit runs the SAME re-verification as the CLI —
   // the "holds" flag below is the server-side auditor's own signature
@@ -431,7 +464,7 @@ export function hubHTML(view: HubView): string {
   var statusText = document.getElementById("run-status-text");
   var label = button.textContent;
   // Agent step number → which rail lights up (demo/agent.ts numbers them).
-  var STAGE = { 1: "server", 2: "server", 3: "agent", 4: "facilitator", 5: "chain", 6: "mirror", 7: "agent", 8: "hcs" };
+  var STAGE = { 1: "server", 2: "server", 3: "agent", 4: "facilitator", 5: "chain", 6: "mirror", 7: "receipt", 8: "hcs" };
   function esc(text) { return text.replace(/[&<>"']/g, function (ch) { return "&#" + ch.charCodeAt(0) + ";"; }); }
   function linkify(html) { return html.replace(/https?:\\/\\/[^\\s<]+/g, function (url) { return '<a href="' + url + '" target="_blank">' + url + "</a>"; }); }
   var WALLET = ${JSON.stringify({
@@ -549,7 +582,20 @@ export function hubHTML(view: HubView): string {
     document.querySelectorAll('input[name="run-mode"]').forEach(function (radio) { radio.disabled = true; });
     document.getElementById("approve-wallet").style.display = mode === "wallet" ? "" : "none";
     document.getElementById("approve-yes").style.display = mode === "wallet" ? "none" : "";
-    var events = new EventSource("/demo/run" + (mode !== "auto" ? "?approval=1" : ""));
+    // The run's knobs ride the query string: approval mode, and the spend
+    // cap (atomic units) the agent enforces BEFORE anything is signed.
+    var params = [];
+    if (mode !== "auto") params.push("approval=1");
+    // The human types ℏ; the wire stays atomic. String math, no floats —
+    // "0.5" → "50000000", "5" → "500000000" (8 decimals, exact).
+    var capInput = document.getElementById("max-payment");
+    var capRaw = capInput ? capInput.value.trim() : "";
+    if (/^\\d+(\\.\\d{1,8})?$/.test(capRaw)) {
+      var capParts = capRaw.split(".");
+      var tinybar = (capParts[0] + (capParts[1] || "").padEnd(8, "0")).replace(/^0+(?=\\d)/, "");
+      params.push("maxPayment=" + tinybar);
+    }
+    var events = new EventSource("/demo/run" + (params.length ? "?" + params.join("&") : ""));
     events.addEventListener("line", function (event) {
       log.innerHTML += linkify(esc(event.data)) + "\\n";
       log.scrollTop = log.scrollHeight;
@@ -611,7 +657,15 @@ export function hubHTML(view: HubView): string {
       // letting a stale PAID receipt read as this run's result.
       if (exitCode === 3) {
         status.className = "status on";
-        statusText.textContent = "Declined — nothing signed, nothing spent. No new receipt.";
+        statusText.textContent =
+          "Declined — nothing signed, nothing spent. No new receipt (any card below is an earlier run's, and says so).";
+        hint.style.display = "none";
+        return;
+      }
+      if (exitCode === 4) {
+        status.className = "status on";
+        statusText.textContent =
+          "Refused by the agent's spend cap — the quote exceeded your limit. Nothing signed, nothing spent.";
         hint.style.display = "none";
         return;
       }

@@ -29,7 +29,13 @@ import { createApp, type AgentRun } from "./app.js";
 // relays the child's narration to the dashboard. In human-approval mode the
 // child pauses on its stdin at step 2½; `decide` writes the hub's answer
 // there — the approval is transport, the GATE lives in the agent.
-function runAgent({ humanApproval }: { humanApproval: boolean }): AgentRun {
+function runAgent({
+  humanApproval,
+  maxPayment,
+}: {
+  humanApproval: boolean;
+  maxPayment?: string;
+}): AgentRun {
   const output = new PassThrough();
   const child = spawn("node_modules/.bin/tsx", ["--env-file=.env", "demo/agent.ts"], {
     stdio: [humanApproval ? "pipe" : "ignore", "pipe", "pipe"],
@@ -39,6 +45,7 @@ function runAgent({ humanApproval }: { humanApproval: boolean }): AgentRun {
       ...process.env,
       SERVER_URL: `http://localhost:${SERVER_PORT}`,
       ...(humanApproval ? { HUMAN_APPROVAL: "1" } : {}),
+      ...(maxPayment !== undefined ? { MAX_AGENT_PAYMENT: maxPayment } : {}),
     },
   });
   child.stdout?.pipe(output, { end: false });

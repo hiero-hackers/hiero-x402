@@ -15,9 +15,12 @@
  * that actually happened there. The day block streams reach testnet, the
  * e2e's verdict gains this provenance by swapping the source.
  *
- * No keys, no env, no network: run it anywhere.
+ * No keys, no env, no network: run it anywhere — `npm run provenance` in a
+ * terminal, or the hub's block-proof button (`/demo/provenance`), which runs
+ * this same function in-process so a demo never has to leave the screen.
  */
 import { readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import {
   HBAR_ASSET,
   SCHEME,
@@ -43,28 +46,45 @@ const requirements = {
 };
 const transactionId = "11.12.2@1774994518.000002058";
 
-console.log("[provenance] judging the settlement against block 467's OWN proof…");
-const verdict = verifySettlementFromBlock(requirements, transactionId, "demo/preview-payment", {
-  blockBytes: fixture("467.blk.gz"),
-  genesisBytes: fixture("0.blk.gz"),
-});
+export interface ProvenanceResult {
+  /** The narration, line by line — same words in the terminal and the hub. */
+  readonly lines: string[];
+  /** The verdict's status word ("paid" on the committed fixture). */
+  readonly status: string;
+}
 
-console.log(`[provenance] ${verdictLine(verdict)}`);
-const provenance = verdict.receipts[0]?.provenance;
-console.log(
-  `[provenance] receipt provenance: ${provenance?.kind ?? "none"} — proof checked before a single field was believed`,
-);
-writeFileSync(
-  "verified-receipt.html",
-  settlementReceiptHTML(verdict, {
-    // The artifact explains itself — a reader must not need the README to
-    // decode the old date or the unfamiliar network.
-    caveat:
-      "Beta demonstration: this proof is verified from a committed PREVIEWNET block " +
-      "fixture (block 467 — its real consensus date), because HIP-1056 block streams " +
-      "have not reached testnet yet. The pipeline is live; the source is the fixture.",
-  }),
-);
-console.log("[provenance] receipt written to verified-receipt.html");
-console.log("[provenance] when HIP-1056 block streams reach testnet, the x402 e2e verdict");
-console.log("[provenance] gains this provenance by swapping the source — nothing else changes.");
+/** Verify fixture block 467's own proof and write verified-receipt.html. */
+export function runProvenance(): ProvenanceResult {
+  const lines: string[] = [];
+  lines.push("[provenance] judging the settlement against block 467's OWN proof…");
+  const verdict = verifySettlementFromBlock(requirements, transactionId, "demo/preview-payment", {
+    blockBytes: fixture("467.blk.gz"),
+    genesisBytes: fixture("0.blk.gz"),
+  });
+  lines.push(`[provenance] ${verdictLine(verdict)}`);
+  const provenance = verdict.receipts[0]?.provenance;
+  lines.push(
+    `[provenance] receipt provenance: ${provenance?.kind ?? "none"} — proof checked before a single field was believed`,
+  );
+  writeFileSync(
+    "verified-receipt.html",
+    settlementReceiptHTML(verdict, {
+      // The artifact explains itself — a reader must not need the README to
+      // decode the old date or the unfamiliar network.
+      caveat:
+        "Beta demonstration: this proof is verified from a committed PREVIEWNET block " +
+        "fixture (block 467 — its real consensus date), because HIP-1056 block streams " +
+        "have not reached testnet yet. The pipeline is live; the source is the fixture.",
+    }),
+  );
+  lines.push("[provenance] receipt written to verified-receipt.html");
+  lines.push("[provenance] when HIP-1056 block streams reach testnet, the x402 e2e verdict");
+  lines.push("[provenance] gains this provenance by swapping the source — nothing else changes.");
+  return { lines, status: verdict.fulfilment.status };
+}
+
+// ── CLI ────────────────────────────────────────────────────────────────────
+// `npm run provenance` — same runProvenance(), spoken aloud.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  for (const line of runProvenance().lines) console.log(line);
+}

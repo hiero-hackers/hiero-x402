@@ -93,6 +93,35 @@ console.log(
     `the agent pays the price, never the fee)`,
 );
 
+// The agent's own spend policy — a cap the operator (or the hub's input)
+// sets in atomic units. Checked BEFORE the approval gate: a quote over the
+// cap is not worth a human's time, let alone a signature. Exit 4 is the
+// policy-refusal code (0 paid · 2 unverified · 3 declined · 4 over cap).
+const MAX_PAYMENT = process.env.MAX_AGENT_PAYMENT ?? "";
+if (MAX_PAYMENT !== "" && /^\d+$/.test(MAX_PAYMENT)) {
+  if (accepted.asset !== HBAR_ASSET) {
+    // The cap is denominated in tinybar — comparing it to a TOKEN quote
+    // (USDC base units) would be unit soup. Say so rather than mis-apply.
+    console.log(
+      "[agent]     spend policy: cap is HBAR-denominated — not applied to this token quote",
+    );
+  } else if (BigInt(accepted.amount) > BigInt(MAX_PAYMENT)) {
+    console.log(
+      `[agent] 2 · REFUSED by spend policy — the quote exceeds the cap of ` +
+        `${fmtAmount(BigInt(MAX_PAYMENT), accepted.asset)}; nothing signed, nothing spent`,
+    );
+    process.exit(4);
+  } else {
+    console.log(
+      `[agent]     spend policy ✓ quote is within the cap of ${fmtAmount(BigInt(MAX_PAYMENT), accepted.asset)}`,
+    );
+  }
+} else if (MAX_PAYMENT !== "") {
+  console.warn(
+    "[agent] MAX_AGENT_PAYMENT must be a whole number of tinybar (5 ℏ = 500000000) — cap ignored",
+  );
+}
+
 if (process.env.HUMAN_APPROVAL === "1") {
   console.log(
     `[agent] 2½ · AWAITING HUMAN APPROVAL — pay ${fmtAmount(BigInt(accepted.amount), accepted.asset)} ` +

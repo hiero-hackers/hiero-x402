@@ -41,6 +41,7 @@ import {
 import type { SupportedNetwork } from "../src/index.js";
 import { auditTopic } from "./audit.js";
 import { hubHTML } from "./hub.js";
+import { runProvenance } from "./provenance.js";
 import { CATALOG, productRequest, verifySignatureWithKey } from "./shared.js";
 
 export interface AppOptions {
@@ -57,7 +58,7 @@ export interface AppOptions {
    * deployments). With `humanApproval`, the child pauses at step 2½ until
    * `decide` relays the human's answer to its stdin.
    */
-  readonly runAgent?: (options: { humanApproval: boolean }) => AgentRun;
+  readonly runAgent?: (options: { humanApproval: boolean; maxPayment?: string }) => AgentRun;
   /**
    * The expected human approver for wallet-signed consent (optional).
    * Resolved by the server at boot — the account id approvals must come
@@ -139,13 +140,18 @@ function mintChallenge(terms: string): PendingChallenge {
  */
 function verifyConsent(publicKey: string, terms: string, signatureB64: string): boolean {
   const direct = Buffer.from(terms, "utf8");
-  const prefixed = Buffer.concat([
-    Buffer.from(`\x19Hedera Signed Message:\n${direct.length}`, "utf8"),
-    direct,
-  ]);
+  // HIP-820 wallets sign "\x19Hedera Signed Message:\n<len><message>" — but
+  // implementations disagree on <len>: BYTES (the spec's reading) vs the JS
+  // STRING length (UTF-16 units — what HashConnect computes). The two agree
+  // on ASCII and diverge the moment the terms carry "ℏ" or "·", which ours
+  // now do — so accept either, plus the unprefixed raw bytes.
+  const prefixed = (length: number): Buffer =>
+    Buffer.concat([Buffer.from(`\x19Hedera Signed Message:\n${String(length)}`, "utf8"), direct]);
   return (
     verifySignatureWithKey(publicKey, direct, signatureB64) ||
-    verifySignatureWithKey(publicKey, prefixed, signatureB64)
+    verifySignatureWithKey(publicKey, prefixed(direct.length), signatureB64) ||
+    (terms.length !== direct.length &&
+      verifySignatureWithKey(publicKey, prefixed(terms.length), signatureB64))
   );
 }
 
@@ -277,6 +283,10 @@ export function createApp(options: AppOptions): Hono {
           : {}),
         topic: options.attestTopicId ?? "",
         receiptFresh: freshReceipt,
+        receiptStamp: (file: string) =>
+          freshReceipt(file)
+            ? new Date(statSync(file).mtimeMs).toLocaleTimeString("en-GB")
+            : undefined,
       }),
     ),
   );
@@ -296,7 +306,13 @@ export function createApp(options: AppOptions): Hono {
       return c.json({ error: "a run is already in progress — one settlement at a time" }, 409);
     }
     agentRunning = true;
-    const run = runAgent({ humanApproval: c.req.query("approval") === "1" });
+    // The hub's spend cap, validated here (digits only) — the agent
+    // enforces it before signing; garbage never reaches the child's env.
+    const maxPayment = c.req.query("maxPayment");
+    const run = runAgent({
+      humanApproval: c.req.query("approval") === "1",
+      ...(maxPayment !== undefined && /^\d+$/.test(maxPayment) ? { maxPayment } : {}),
+    });
     pendingDecision = run.decide;
     const lines = createInterface({ input: run.narration });
     return streamSSE(c, async (sse) => {
@@ -390,6 +406,18 @@ export function createApp(options: AppOptions): Hono {
     pendingDecision = undefined;
     decide(body.approve === true);
     return c.json({ ok: true });
+  });
+
+  // The block-proof rung, on a button: the SAME runProvenance() the CLI
+  // runs — real previewnet block, real proof recomputation, offline and
+  // keyless — so a demo never has to leave the screen to show the top
+  // rung. Writes verified-receipt.html fresh, which lights its card.
+  app.post("/demo/provenance", (c) => {
+    try {
+      return c.json({ ok: true, ...runProvenance() });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    }
   });
 
   // The hub's audit view — the SAME auditTopic() the CLI runs, served as
