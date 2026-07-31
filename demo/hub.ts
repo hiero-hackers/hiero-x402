@@ -501,12 +501,38 @@ export function hubHTML(view: HubView): string {
     for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
     return btoa(bin);
   }
+  // Wallet libraries load from a CDN — a single source is a demo-day
+  // single point of failure, so try two, cache the winner, and prefetch
+  // in the background the moment the page knows wallet mode is possible.
+  function importFirst(urls) {
+    return urls.reduce(function (p, u) { return p.catch(function () { return import(u); }); }, Promise.reject());
+  }
+  var sdkModule = null;
+  var hcModule = null;
+  async function walletModules() {
+    if (!sdkModule) sdkModule = await importFirst([
+      "https://esm.sh/@hashgraph/sdk@2?bundle",
+      "https://cdn.jsdelivr.net/npm/@hashgraph/sdk@2/+esm",
+    ]);
+    if (!hcModule) hcModule = await importFirst([
+      "https://esm.sh/hashconnect@3?bundle",
+      "https://cdn.jsdelivr.net/npm/hashconnect@3/+esm",
+    ]);
+    return { sdk: sdkModule, hcmod: hcModule };
+  }
+  if (WALLET.projectId) setTimeout(function () { walletModules().catch(function () { /* retried on click */ }); }, 500);
   async function walletApprove() {
     try {
       if (!pausedTerms) throw new Error("no paused terms captured");
       statusText.textContent = "Waiting for the wallet signature…";
-      var sdk = await import("https://esm.sh/@hashgraph/sdk@2?bundle");
-      var hcmod = await import("https://esm.sh/hashconnect@3?bundle");
+      var mods;
+      try {
+        mods = await walletModules();
+      } catch (loadErr) {
+        throw new Error("could not load the wallet libraries (CDN unreachable) — check the connection and click again");
+      }
+      var sdk = mods.sdk;
+      var hcmod = mods.hcmod;
       if (!window.__hc) {
         var hc = new hcmod.HashConnect(
           sdk.LedgerId.TESTNET,

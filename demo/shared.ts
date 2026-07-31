@@ -154,6 +154,30 @@ export async function verifyAccountSignature(
   return verifySignatureWithKey(keyText, Buffer.from(message, "utf8"), signatureB64);
 }
 
+/**
+ * Like verifyAccountSignature, but for WALLET-made signatures: HIP-820
+ * wallets prefix the message ("\x19Hedera Signed Message:\n<len>") and
+ * implementations disagree on whether <len> counts bytes or JS string
+ * units — accept raw plus both prefix conventions.
+ */
+export async function verifyWalletSignature(
+  accountId: string,
+  message: string,
+  signatureB64: string,
+): Promise<boolean> {
+  const keyText = await fetchAccountPublicKey(accountId);
+  if (keyText === undefined) return false;
+  const direct = Buffer.from(message, "utf8");
+  const prefixed = (length: number): Buffer =>
+    Buffer.concat([Buffer.from(`\x19Hedera Signed Message:\n${String(length)}`, "utf8"), direct]);
+  return (
+    verifySignatureWithKey(keyText, direct, signatureB64) ||
+    verifySignatureWithKey(keyText, prefixed(direct.length), signatureB64) ||
+    (message.length !== direct.length &&
+      verifySignatureWithKey(keyText, prefixed(message.length), signatureB64))
+  );
+}
+
 /** The account's single on-chain public key (raw hex) from the mirror, or undefined. */
 export async function fetchAccountPublicKey(accountId: string): Promise<string | undefined> {
   try {

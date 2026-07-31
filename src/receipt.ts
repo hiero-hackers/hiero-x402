@@ -53,6 +53,35 @@ export interface ReceiptOptions {
    * invents one; the caller owns the honesty.
    */
   readonly caveat?: string;
+  /**
+   * The wallet-signed human approval for THIS payment, when one happened.
+   * `terms` is the one-time challenge the wallet signed (nonce + issue
+   * time bind it to this run); `verified` is the caller's re-verification
+   * against the approver's ON-CHAIN key — same discipline as content
+   * commitments: rendered in its own register, never under the settlement
+   * seal's authority. Absent → an autonomous run; no panel, no judgment.
+   */
+  readonly consent?: {
+    readonly approver: string;
+    readonly terms: string;
+    readonly signatureB64: string;
+    readonly verified: boolean;
+  };
+  /**
+   * The proof facts for a block-proof verdict — WHAT was checked, not just
+   * that checking happened: the source block, the anchor it chains to, and
+   * the checks that had to hold before a single field was believed. The
+   * caller owns the facts (it ran the proof); the receipt renders them in
+   * the gold register the seal already claims.
+   */
+  readonly proof?: {
+    /** e.g. "block 467 · hedera:previewnet (committed fixture)" */
+    readonly source: string;
+    /** e.g. "genesis block 0 — the chain of block hashes ends here" */
+    readonly anchor?: string;
+    /** The checks, in the order they ran. */
+    readonly checks: readonly string[];
+  };
 }
 
 /** "5000000 atomic units" — with the grammar surviving an amount of 1. */
@@ -132,6 +161,66 @@ function contentPanel(content: DeliveredContent): string {
 }
 
 /**
+ * The human-approval panel — who consented to THIS payment, re-verifiable.
+ * Two registers only: the signature holds against the approver's on-chain
+ * key, or it was claimed and does not — an unverifiable consent is loud,
+ * never quietly displayed as fact.
+ */
+function consentPanel(consent: NonNullable<ReceiptOptions["consent"]>): string {
+  const register = consent.verified
+    ? {
+        badge: "HUMAN APPROVED",
+        badgeClass: "human",
+        line: "A human&#39;s wallet signed this exact challenge — nonce and issue time bind the approval to THIS run, so a captured signature approves nothing later.",
+      }
+    : {
+        badge: "CONSENT UNVERIFIED",
+        badgeClass: "bad",
+        line: "A consent was presented but its signature does not verify against the approver&#39;s on-chain key — treat the approval as unattested.",
+      };
+  return `<section class="x402-card x402-content">
+  <p class="x402-eyebrow">Human approval</p>
+  <div class="x402-top">
+    <span class="x402-badge ${register.badgeClass}">${register.badge}</span>
+  </div>
+  <p class="x402-content-line">${register.line}</p>
+  <dl class="x402-meta">
+    <div><dt>Approver</dt><dd><code>${escapeHTML(consent.approver)}</code></dd></div>
+    <div><dt>Signed challenge</dt><dd><code>${escapeHTML(consent.terms)}</code></dd></div>
+    <div><dt>Signature</dt><dd><code>${escapeHTML(consent.signatureB64)}</code></dd></div>
+  </dl>
+  <p class="x402-method">Consent binds a human to these terms. It does not move money — the settlement above did that, and is proven separately.</p>
+</section>`;
+}
+
+/**
+ * The proof panel — the block-proof rung's working, shown. A receipt that
+ * says "cryptographically verified" without saying WHAT was checked asks
+ * for the very trust this repo exists to remove.
+ */
+function proofPanel(proof: NonNullable<ReceiptOptions["proof"]>): string {
+  const checks = proof.checks
+    .map((check) => `<div><dt>Checked</dt><dd class="x402-prose">${escapeHTML(check)}</dd></div>`)
+    .join("\n    ");
+  return `<section class="x402-card x402-content">
+  <p class="x402-eyebrow">The proof&#39;s working</p>
+  <div class="x402-top">
+    <span class="x402-badge proof-badge">BLOCK PROOF</span>
+  </div>
+  <p class="x402-content-line">Nothing below was believed until every check here held — one flipped byte anywhere in the block and this receipt would not exist.</p>
+  <dl class="x402-meta">
+    <div><dt>Source</dt><dd class="x402-prose">${escapeHTML(proof.source)}</dd></div>${
+      proof.anchor !== undefined
+        ? `\n    <div><dt>Anchor</dt><dd class="x402-prose">${escapeHTML(proof.anchor)}</dd></div>`
+        : ""
+    }
+    ${checks}
+  </dl>
+  <p class="x402-method">Cryptography, not attestation: these checks recompute the ledger&#39;s own commitments — no operator, mirror, or facilitator is trusted anywhere above.</p>
+</section>`;
+}
+
+/**
  * The verdict + receipts as one printable HTML document. Everything shown is
  * derived from the *verified* verdict — never echoed from a facilitator's
  * response — so what the reader sees is what the chain said.
@@ -199,6 +288,8 @@ export function settlementReceiptHTML(
 </header>`;
   const bodies = verdict.receipts.map((receipt) => toHTML(receipt)).join("\n");
   const content = options.content === undefined ? "" : `\n${contentPanel(options.content)}`;
+  const consent = options.consent === undefined ? "" : `\n${consentPanel(options.consent)}`;
+  const proof = options.proof === undefined ? "" : `\n${proofPanel(options.proof)}`;
   // ONE column for everything — the banner and the receipt bodies share the
   // same width and left edge, instead of two containers eyeballing centers.
   // hiero-receipts caps its card at 420px and ships a LIGHT card; the trailing
@@ -208,7 +299,7 @@ export function settlementReceiptHTML(
   return `<div class="x402-wrap">
 ${THEME}
 <div class="x402-brand"><span class="mark">x4</span>hiero-x402 <small>verifiable settlement</small></div>
-${banner}${content}
+${banner}${proof}${consent}${content}
 <div class="x402-bodies">${bodies}</div>
 <footer class="x402-foot"><span>hiero-x402 · x402 on Hiero with verifiable settlement</span><span>independent · facilitator-free verification</span></footer>
 ${RCPT_OVERRIDE}
@@ -267,6 +358,8 @@ const THEME = `<style>
   .x402-badge.commit{color:var(--brand-soft);border-color:rgba(128,113,255,.42);background:rgba(128,113,255,.12)}
   .x402-badge.bad{color:var(--danger);border-color:rgba(244,116,107,.42);background:rgba(244,116,107,.1)}
   .x402-badge.mute{color:var(--muted);border-color:var(--line-2);background:rgba(255,255,255,.04)}
+  .x402-badge.human{color:var(--warn);border-color:rgba(243,182,77,.42);background:rgba(243,182,77,.1)}
+  .x402-badge.proof-badge{color:var(--gold);border-color:rgba(230,185,104,.42);background:rgba(230,185,104,.1)}
   .x402-content-line{margin:0 0 1rem;color:var(--text);font-size:.92rem;max-width:36rem}
   .x402-chip{font-size:.68rem;letter-spacing:.08em;padding:.24rem .62rem;border-radius:6px;color:var(--brand-soft);
     border:1px solid rgba(128,113,255,.42);background:rgba(128,113,255,.12);font-family:var(--mono)}
@@ -282,6 +375,8 @@ const THEME = `<style>
   .x402-meta dt{color:var(--faint);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em}
   .x402-meta dd{margin:0;font-family:var(--mono);font-size:.82rem;color:var(--brand-soft);
     word-break:break-all;text-align:right}
+  /* prose values (proof checks, sources) wrap at words — break-all is for hashes */
+  .x402-meta dd.x402-prose{word-break:normal;overflow-wrap:break-word}
   .x402-proof{margin:0 0 .65rem;font-size:.88rem;color:var(--muted)}
   .x402-proof a{color:var(--proof);text-decoration:none;font-weight:600}
   .x402-proof a:hover{text-decoration:underline}

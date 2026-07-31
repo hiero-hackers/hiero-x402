@@ -75,6 +75,16 @@ export function runProvenance(): ProvenanceResult {
         "Beta demonstration: this proof is verified from a committed PREVIEWNET block " +
         "fixture (block 467 — its real consensus date), because HIP-1056 block streams " +
         "have not reached testnet yet. The pipeline is live; the source is the fixture.",
+      // The proof's working — WHAT held before a single field was believed.
+      proof: {
+        source: "block 467 · hedera:previewnet (committed fixture, real block)",
+        anchor: "genesis block 0 — the chain of block hashes ends here",
+        checks: [
+          "the block's merkle root, recomputed from its own items — not read from a header",
+          "the in-band block proof's threshold signature, verified against the ledger id",
+          "the settlement transaction located INSIDE the proven block, judged against the terms",
+        ],
+      },
     }),
   );
   lines.push("[provenance] receipt written to verified-receipt.html");

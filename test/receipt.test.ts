@@ -122,6 +122,62 @@ describe("settlementReceiptHTML", () => {
     expect(html).not.toContain("Delivered content");
   });
 
+  it("shows WHO approved THIS payment when a wallet signed the challenge — re-verifiable", async () => {
+    const verdict = await verdictFor(5_000_000);
+    // No consent → no panel: an autonomous run is the thesis, not a warning.
+    expect(settlementReceiptHTML(verdict)).not.toContain("Human approval");
+    const approved = settlementReceiptHTML(verdict, {
+      consent: {
+        approver: "0.0.4242",
+        terms: "hiero-x402 approval · pay 0.05 ℏ · nonce abc123 · issued 2026-07-31T12:00:00Z",
+        signatureB64: "c2ln",
+        verified: true,
+      },
+    });
+    expect(approved).toContain("Human approval");
+    expect(approved).toContain("HUMAN APPROVED");
+    expect(approved).toContain("0.0.4242");
+    expect(approved).toContain("nonce abc123"); // the run-binding, visible
+    expect(approved).toContain("does not move money"); // scope honesty
+    // A claimed consent that does not verify is loud, never displayed as fact.
+    const broken = settlementReceiptHTML(verdict, {
+      consent: {
+        approver: "0.0.4242",
+        terms: "<script>alert(1)</script>",
+        signatureB64: "c2ln",
+        verified: false,
+      },
+    });
+    expect(broken).toContain("CONSENT UNVERIFIED");
+    expect(broken).toContain("unattested");
+    expect(broken).not.toContain("<script>alert(1)</script>"); // escaped
+  });
+
+  it("shows the proof's working when the caller ran one — and nothing when it didn't", async () => {
+    const verdict = await verdictFor(5_000_000);
+    // The mirror path ran no block proof — claiming one would be the lie
+    // this repo exists to end.
+    expect(settlementReceiptHTML(verdict)).not.toContain("proof&#39;s working");
+    const html = settlementReceiptHTML(verdict, {
+      proof: {
+        source: "block 467 · hedera:previewnet (committed fixture, real block)",
+        anchor: "genesis block 0 — the chain of block hashes ends here",
+        checks: ["the block's merkle root, recomputed <from> its own items"],
+      },
+    });
+    expect(html).toContain("The proof&#39;s working");
+    expect(html).toContain("block 467");
+    expect(html).toContain("genesis block 0");
+    expect(html).toContain("one flipped byte"); // falsifiability, stated
+    expect(html).not.toContain("<from>"); // checks are escaped
+    // Anchor is optional — a future source may anchor differently.
+    const anchorless = settlementReceiptHTML(verdict, {
+      proof: { source: "block 9", checks: ["a check"] },
+    });
+    expect(anchorless).toContain("The proof&#39;s working");
+    expect(anchorless).not.toContain("Anchor");
+  });
+
   it("renders a caveat only when the caller owns up to one, escaped", async () => {
     const verdict = await verdictFor(5_000_000);
     expect(settlementReceiptHTML(verdict)).not.toContain('<p class="x402-caveat">');

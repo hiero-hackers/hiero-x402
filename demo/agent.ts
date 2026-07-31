@@ -41,7 +41,13 @@ import {
 import type { DeliveredContent } from "../src/index.js";
 import { attest } from "./attest.js";
 import { hushBenignSdkWarnings } from "./quiet.js";
-import { demoNetwork, requireEnv, resolvePrivateKey, verifyAccountSignature } from "./shared.js";
+import {
+  demoNetwork,
+  requireEnv,
+  resolvePrivateKey,
+  verifyAccountSignature,
+  verifyWalletSignature,
+} from "./shared.js";
 
 hushBenignSdkWarnings(); // drop the SDK's expected raw-HEX-key advisory (see quiet.ts)
 
@@ -277,9 +283,37 @@ if (commitSha !== null && commitSigner !== null && commitSignature !== null) {
   );
 }
 
+// The human approval, re-verified for the receipt: the hub checked the
+// wallet signature before relaying, but this agent grades its own homework
+// against the approver's ON-CHAIN key — the receipt's consent panel shows
+// the agent's verdict, not the hub's word.
+let consent:
+  { approver: string; terms: string; signatureB64: string; verified: boolean } | undefined;
+if (humanConsent !== undefined) {
+  const consentVerified = await verifyWalletSignature(
+    humanConsent.accountId,
+    humanConsent.terms,
+    humanConsent.signature,
+  );
+  consent = {
+    approver: humanConsent.accountId,
+    terms: humanConsent.terms,
+    signatureB64: humanConsent.signature,
+    verified: consentVerified,
+  };
+  console.log(
+    consentVerified
+      ? `[agent]     consent ✓ re-verified against ${humanConsent.accountId}'s on-chain key — on the receipt`
+      : `[agent]     consent signature did NOT re-verify — the receipt says so`,
+  );
+}
+
 // The path is the operator's own env choice, not request-derived input.
 
-writeFileSync(RECEIPT_PATH, settlementReceiptHTML(verdict, { content }));
+writeFileSync(
+  RECEIPT_PATH,
+  settlementReceiptHTML(verdict, { content, ...(consent !== undefined ? { consent } : {}) }),
+);
 console.log(`[agent] 7 · receipt written to ${RECEIPT_PATH}`);
 
 // 8 · Optional HCS attestation — the verdict onto an append-only public log.

@@ -13,7 +13,7 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 // quoted/settled rows made them taller; a short window silently crops.
 const SHOTS = [
   ["receipt.html", "docs/receipt.png", 1390, "npm run e2e"],
-  ["verified-receipt.html", "docs/verified-receipt.png", 1040, "npm run provenance"],
+  ["verified-receipt.html", "docs/verified-receipt.png", 1560, "npm run provenance"],
 ];
 
 mkdirSync("docs", { recursive: true });
