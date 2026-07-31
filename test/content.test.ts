@@ -2,7 +2,9 @@
 import { describe, expect, it } from "vitest";
 import {
   CONTENT_COMMITMENT_VERSION,
+  commitmentReference,
   contentCommitmentMessage,
+  isSha256Hex,
   parseContentCommitment,
   sha256Hex,
 } from "../src/index.js";
@@ -21,6 +23,27 @@ describe("sha256Hex", () => {
     // The best-known sha-256 test vector — pinned so the helper can never
     // silently become a different hash.
     expect(asString).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  });
+});
+
+describe("commitmentReference", () => {
+  it("is the route PATH — never a full URL, never the query — from either form", () => {
+    // The convention's one owner: server middleware passes the request URL,
+    // the agent passes the URL it fetched — both must land on the same bytes.
+    expect(commitmentReference("http://localhost:4021/data/spot-price?symbol=HBAR")).toBe(
+      "/data/spot-price",
+    );
+    expect(commitmentReference(new URL("https://api.example.test/data/fx"))).toBe("/data/fx");
+    expect(commitmentReference("/data/spot-price?symbol=HBAR")).toBe("/data/spot-price");
+    expect(commitmentReference("/data/ohlc")).toBe("/data/ohlc");
+  });
+});
+
+describe("isSha256Hex", () => {
+  it("accepts exactly the canonical spelling", () => {
+    expect(isSha256Hex("a".repeat(64))).toBe(true);
+    expect(isSha256Hex("A".repeat(64))).toBe(false); // one canonical case
+    expect(isSha256Hex("a".repeat(63))).toBe(false);
   });
 });
 

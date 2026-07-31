@@ -18,7 +18,13 @@
  * No keys, no env, no network: run it anywhere.
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { settlementReceiptHTML, verdictLine, verifySettlementFromBlock } from "../src/index.js";
+import {
+  HBAR_ASSET,
+  SCHEME,
+  settlementReceiptHTML,
+  verdictLine,
+  verifySettlementFromBlock,
+} from "../src/index.js";
 
 const fixture = (name: string): Buffer =>
   readFileSync(new URL(`../test/fixtures/${name}`, import.meta.url));
@@ -27,10 +33,10 @@ const fixture = (name: string): Buffer =>
 // identified by its TRUE transaction id (payer@validStart — streams-node
 // exposes it since 0.2.0, a change this build fed upstream).
 const requirements = {
-  scheme: "exact",
+  scheme: SCHEME,
   network: "hedera:previewnet" as const,
   amount: "1",
-  asset: "0.0.0",
+  asset: HBAR_ASSET,
   payTo: "11.12.98",
   maxTimeoutSeconds: 180,
   extra: { feePayer: "11.12.2" },

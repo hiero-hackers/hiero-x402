@@ -22,6 +22,7 @@
 import { Buffer } from "node:buffer";
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { formatBaseUnits } from "@hiero-hackers/hiero-payment-requests";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { createClientHederaSigner } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
@@ -29,6 +30,8 @@ import {
   CONTENT_SHA256_HEADER,
   CONTENT_SIGNATURE_HEADER,
   CONTENT_SIGNER_HEADER,
+  HBAR_ASSET,
+  commitmentReference,
   contentCommitmentMessage,
   settlementReceiptHTML,
   sha256Hex,
@@ -58,14 +61,13 @@ const httpClient = new x402HTTPClient(
 );
 
 /** "0.05000000 ℏ (5,000,000 tinybar)" — amounts a human can read at a
- *  glance. The wire stays atomic; only the narration converts. */
+ *  glance. The wire stays atomic; only the narration converts, and the
+ *  decimal split comes from the library, not hand-rolled bigint math. */
 function fmtAmount(amount: bigint, asset: string): string {
-  if (asset !== "0.0.0") {
+  if (asset !== HBAR_ASSET) {
     return `${amount.toLocaleString("en-US")} base units of token ${asset}`;
   }
-  const whole = amount / 100_000_000n;
-  const frac = (amount % 100_000_000n).toString().padStart(8, "0");
-  return `${whole.toString()}.${frac} ℏ (${amount.toLocaleString("en-US")} tinybar)`;
+  return `${formatBaseUnits(amount, 8)} ℏ (${amount.toLocaleString("en-US")} tinybar)`;
 }
 
 const url = `${SERVER_URL}${RESOURCE}?symbol=${encodeURIComponent(SYMBOL)}`;
@@ -78,10 +80,7 @@ if (challenge.status !== 402) {
 }
 const paymentRequired = httpClient.getPaymentRequiredResponse(
   (name) => challenge.headers.get(name),
-  await challenge
-    .clone()
-    .json()
-    .catch(() => undefined),
+  await challenge.json().catch(() => undefined),
 );
 const accepted = paymentRequired.accepts[0];
 if (accepted === undefined) {
@@ -214,10 +213,11 @@ const contentSha = sha256Hex(receivedBytes);
 const commitSha = paid.headers.get(CONTENT_SHA256_HEADER);
 const commitSigner = paid.headers.get(CONTENT_SIGNER_HEADER);
 const commitSignature = paid.headers.get(CONTENT_SIGNATURE_HEADER);
-// `reference: RESOURCE` is the route path — the form the server SIGNS —
-// not the full settlement URL; artifacts downstream carry it so the exact
-// signed bytes stay rebuildable from any of them.
-let content: DeliveredContent = { sha256: contentSha, reference: RESOURCE };
+// The signed reference — derived by the SAME convention function the
+// server middleware uses (src/content.ts commitmentReference), so the two
+// parties can never disagree about which form was signed.
+const signedReference = commitmentReference(url);
+let content: DeliveredContent = { sha256: contentSha, reference: signedReference };
 if (commitSha !== null && commitSigner !== null && commitSignature !== null) {
   const committed =
     commitSha === contentSha &&
@@ -227,14 +227,14 @@ if (commitSha !== null && commitSigner !== null && commitSignature !== null) {
         // The canonical REST-normalized id — the same form the server
         // signed, the verdict carries, and the topic attestation records.
         transactionId: verdict.transactionId,
-        reference: RESOURCE,
+        reference: signedReference,
         sha256: contentSha,
       }),
       commitSignature,
     ));
   content = {
     sha256: contentSha,
-    reference: RESOURCE,
+    reference: signedReference,
     commitment: { signer: commitSigner, signatureB64: commitSignature, verified: committed },
   };
   console.log(

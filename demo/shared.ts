@@ -35,6 +35,44 @@ export function requireEnv(name: string): string {
  * and fails loudly with the real reason ("that key does not belong to that
  * account") instead of a curve lottery.
  */
+/** What the mirror knows about an account — the fields this demo reads. */
+interface MirrorAccount {
+  readonly key?: { readonly key?: string };
+  readonly deleted?: boolean;
+  readonly receiver_sig_required?: boolean;
+}
+
+/** ONE mirror account lookup for the whole demo — throws `mirror answered
+ *  <status>` on a non-OK answer; each caller keeps its own error posture
+ *  (exit, warn-and-proceed, undefined) on top. */
+async function fetchAccount(accountId: string): Promise<MirrorAccount> {
+  const host = MIRROR_HOSTS[demoNetwork()];
+  const response = await fetch(`${host}/api/v1/accounts/${encodeURIComponent(accountId)}`);
+  if (!response.ok) throw new Error(`mirror answered ${String(response.status)}`);
+  return (await response.json()) as MirrorAccount;
+}
+
+/**
+ * Does `signatureB64` verify as `publicKeyText` over `message` (utf8)? The
+ * ONE verification core — every demo path (content commitments, the
+ * auditor, wallet consent) judges signatures here. Any failure (unreadable
+ * key, malformed signature) is a plain false — absence of proof.
+ */
+export function verifySignatureWithKey(
+  publicKeyText: string,
+  message: Buffer,
+  signatureB64: string,
+): boolean {
+  try {
+    const key = PublicKey.fromString(publicKeyText);
+    const signature = Buffer.from(signatureB64, "base64");
+    if (signature.length === 0) return false;
+    return key.verify(message, signature);
+  } catch {
+    return false;
+  }
+}
+
 export async function resolvePrivateKey(
   accountId: string,
   text: string,
@@ -60,11 +98,8 @@ export async function resolvePrivateKey(
   }
 
   const network = demoNetwork();
-  const host = MIRROR_HOSTS[network];
   try {
-    const response = await fetch(`${host}/api/v1/accounts/${encodeURIComponent(accountId)}`);
-    if (!response.ok) throw new Error(`mirror answered ${response.status}`);
-    const body = (await response.json()) as { key?: { key?: string } };
+    const body = await fetchAccount(accountId);
     const onChain = body.key?.key?.toLowerCase();
     if (onChain === undefined)
       throw new Error(`${accountId} has no single ECDSA/ED25519 key on the mirror`);
@@ -116,24 +151,13 @@ export async function verifyAccountSignature(
 ): Promise<boolean> {
   const keyText = await fetchAccountPublicKey(accountId);
   if (keyText === undefined) return false;
-  try {
-    const key = PublicKey.fromString(keyText);
-    const signature = Buffer.from(signatureB64, "base64");
-    if (signature.length === 0) return false;
-    return key.verify(Buffer.from(message, "utf8"), signature);
-  } catch {
-    return false;
-  }
+  return verifySignatureWithKey(keyText, Buffer.from(message, "utf8"), signatureB64);
 }
 
 /** The account's single on-chain public key (raw hex) from the mirror, or undefined. */
 export async function fetchAccountPublicKey(accountId: string): Promise<string | undefined> {
-  const host = MIRROR_HOSTS[demoNetwork()];
   try {
-    const response = await fetch(`${host}/api/v1/accounts/${encodeURIComponent(accountId)}`);
-    if (!response.ok) return undefined;
-    const body = (await response.json()) as { key?: { key?: string } };
-    return body.key?.key;
+    return (await fetchAccount(accountId)).key?.key;
   } catch {
     return undefined;
   }
@@ -148,12 +172,9 @@ export async function fetchAccountPublicKey(accountId: string): Promise<string |
  * Mirror unreachable → warn and proceed (same posture as the key check).
  */
 export async function confirmPayToAccount(accountId: string): Promise<void> {
-  const host = MIRROR_HOSTS[demoNetwork()];
-  let body: { deleted?: boolean; receiver_sig_required?: boolean };
+  let body: MirrorAccount;
   try {
-    const response = await fetch(`${host}/api/v1/accounts/${encodeURIComponent(accountId)}`);
-    if (!response.ok) throw new Error(`mirror answered ${response.status}`);
-    body = (await response.json()) as typeof body;
+    body = await fetchAccount(accountId);
   } catch (error) {
     // Messages name the env var, never its value (CodeQL: clear-text logging).
     const reason = error instanceof Error ? error.message : String(error);

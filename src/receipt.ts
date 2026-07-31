@@ -324,12 +324,3 @@ const RCPT_OVERRIDE = `<style>
   @media print{.rcpt{background:#fff;color:#1a1d24;border-color:#d8dce2}.rcpt h3{color:#111}
     .rcpt td.v{color:#1a1d24}.rcpt .who,.rcpt td.k,.rcpt .prov{color:#5b6472}}
 </style>`;
-  return `<div class="x402-wrap">
-${theme}
-<div class="x402-brand"><span class="mark">x4</span>hiero-x402 <small>verifiable settlement</small></div>
-${banner}${content}
-<div class="x402-bodies">${bodies}</div>
-<footer class="x402-foot"><span>hiero-x402 · x402 on Hiero with verifiable settlement</span><span>independent · facilitator-free verification</span></footer>
-${rcptOverride}
-</div>`;
-}

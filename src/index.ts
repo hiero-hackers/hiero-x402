@@ -31,7 +31,9 @@ export {
   CONTENT_SHA256_HEADER,
   CONTENT_SIGNATURE_HEADER,
   CONTENT_SIGNER_HEADER,
+  commitmentReference,
   contentCommitmentMessage,
+  isSha256Hex,
   parseContentCommitment,
   sha256Hex,
 } from "./content.js";

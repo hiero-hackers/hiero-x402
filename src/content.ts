@@ -48,6 +48,25 @@ export function sha256Hex(bytes: Uint8Array | string): string {
     .digest("hex");
 }
 
+/** Is `text` a well-formed sha-256 digest in this repo's ONE canonical
+ *  spelling (64 lowercase hex chars)? Every parser that judges a digest
+ *  judges it here — two parsers with their own regex is how they drift. */
+export const isSha256Hex = (text: string): boolean => /^[0-9a-f]{64}$/.test(text);
+
+/**
+ * THE convention for what reference a content commitment signs: the route
+ * PATH, never a full URL and never the query string. Settlement references
+ * are often full URLs — the two must not be confused (the auditor's first
+ * field trip caught exactly that mismatch). Server middleware and client
+ * verification both derive the reference HERE, so a deliberate change to
+ * the convention is a one-site edit that moves both parties together.
+ */
+export function commitmentReference(url: string | URL): string {
+  return typeof url === "string" && url.startsWith("/")
+    ? url.split("?")[0]!
+    : new URL(url).pathname;
+}
+
 /**
  * The ONE byte sequence a commitment signs — utf8 of this string. Line
  * format, one fact per line, so the signed bytes are unambiguous and
@@ -81,7 +100,7 @@ export function parseContentCommitment(message: string): ContentCommitment | und
   const transactionId = tx!.slice("tx:".length);
   const reference = ref!.slice("ref:".length);
   const sha256 = sha!.slice("sha256:".length);
-  if (transactionId === "" || reference === "" || !/^[0-9a-f]{64}$/.test(sha256)) {
+  if (transactionId === "" || reference === "" || !isSha256Hex(sha256)) {
     return undefined;
   }
   return { v: CONTENT_COMMITMENT_VERSION, transactionId, reference, sha256 };

@@ -12,7 +12,7 @@
  * strings because they are bigints in atomic units.
  */
 import type { DeliveredContent } from "./content.js";
-import { contentCommitmentMessage } from "./content.js";
+import { contentCommitmentMessage, isSha256Hex } from "./content.js";
 import type { SettlementVerdict } from "./verify.js";
 
 /** The current message version — bump when the shape changes. */
@@ -109,7 +109,7 @@ export function attestationMessage(
 function isAttestedContent(content: unknown): content is AttestedContent {
   if (typeof content !== "object" || content === null) return false;
   const { sha256, reference, commitment } = content as Partial<AttestedContent>;
-  if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) return false;
+  if (typeof sha256 !== "string" || !isSha256Hex(sha256)) return false;
   if (reference !== undefined && (typeof reference !== "string" || reference === "")) return false;
   if (commitment === undefined) return true;
   if (typeof commitment !== "object" || commitment === null) return false;

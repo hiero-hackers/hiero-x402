@@ -85,7 +85,11 @@ async function probe(port: number): Promise<"free" | "ours" | "other"> {
 
 // Pre-flight: don't race whatever already holds the ports. Our own demo
 // already running is SUCCESS (point at the hub); anything else is an error.
-const found = { facilitator: await probe(FACILITATOR_PORT), server: await probe(SERVER_PORT) };
+const [facilitatorPort, serverPort] = await Promise.all([
+  probe(FACILITATOR_PORT),
+  probe(SERVER_PORT),
+]);
+const found = { facilitator: facilitatorPort, server: serverPort };
 if (found.facilitator === "ours" && found.server === "ours") {
   console.log(`[demo] already running — hub: ${HUB}`);
   process.exit(0);

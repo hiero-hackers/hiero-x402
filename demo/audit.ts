@@ -23,9 +23,9 @@
  */
 import { Buffer } from "node:buffer";
 import { pathToFileURL } from "node:url";
-import type { Attestation } from "../src/index.js";
+import type { Attestation, SupportedNetwork } from "../src/index.js";
 import { MIRROR_HOSTS, attestationCommitmentMessage, parseAttestation } from "../src/index.js";
-import { demoNetwork, verifyAccountSignature } from "./shared.js";
+import { demoNetwork, fetchAccountPublicKey, verifySignatureWithKey } from "./shared.js";
 
 /** One audited attestation — the facts, plus the auditor's own verdict. */
 export interface AuditedEntry {
@@ -66,8 +66,13 @@ interface TopicMessage {
 }
 
 /** Every message on the topic, oldest first, straight from the mirror. */
-async function readTopic(topicId: string): Promise<{ rows: TopicMessage[]; truncated: boolean }> {
-  const host = MIRROR_HOSTS[demoNetwork()];
+async function readTopic(
+  topicId: string,
+  network: SupportedNetwork,
+): Promise<{ rows: TopicMessage[]; truncated: boolean }> {
+  // `network` is the gate's narrowed literal union, not attacker-chosen.
+  // eslint-disable-next-line security/detect-object-injection
+  const host = MIRROR_HOSTS[network];
   const rows: TopicMessage[] = [];
   let path = `/api/v1/topics/${encodeURIComponent(topicId)}/messages?limit=100&order=asc`;
   // A page cap so a runaway topic cannot spin this loop forever; the report
@@ -88,12 +93,24 @@ async function readTopic(topicId: string): Promise<{ rows: TopicMessage[]; trunc
   return { rows, truncated: true };
 }
 
-/** Audit a topic: read, parse, and RE-VERIFY every commitment found. */
-export async function auditTopic(topicId: string): Promise<AuditReport> {
-  const { rows, truncated } = await readTopic(topicId);
+/** Audit a topic: read, parse, and RE-VERIFY every commitment found.
+ *  `network` is a parameter (defaulting to the env gate) so the env-free
+ *  app factory can pass its own — env reads stay in the entry points. */
+export async function auditTopic(
+  topicId: string,
+  network: SupportedNetwork = demoNetwork(),
+): Promise<AuditReport> {
+  const { rows, truncated } = await readTopic(topicId, network);
   const entries: AuditedEntry[] = [];
-  // One mirror key lookup per signer, not per message.
-  const signerVerdicts = new Map<string, (message: string, sig: string) => Promise<boolean>>();
+  // One mirror KEY lookup per signer, not per message — the memo holds the
+  // resolved key (as a promise, so concurrent messages share one fetch);
+  // verification itself is then local per message.
+  const signerKeys = new Map<string, Promise<string | undefined>>();
+  const signerKey = (signer: string): Promise<string | undefined> => {
+    const cached = signerKeys.get(signer) ?? fetchAccountPublicKey(signer);
+    signerKeys.set(signer, cached);
+    return cached;
+  };
   let foreign = 0;
   let broken = 0;
   for (const row of rows) {
@@ -111,11 +128,10 @@ export async function auditTopic(topicId: string): Promise<AuditReport> {
         content = { sha256: attestation.content.sha256 };
       } else {
         const message = attestationCommitmentMessage(attestation)!;
-        const verify =
-          signerVerdicts.get(commitment.signer) ??
-          ((m: string, s: string) => verifyAccountSignature(commitment.signer, m, s));
-        signerVerdicts.set(commitment.signer, verify);
-        const holds = await verify(message, commitment.signature);
+        const keyText = await signerKey(commitment.signer);
+        const holds =
+          keyText !== undefined &&
+          verifySignatureWithKey(keyText, Buffer.from(message, "utf8"), commitment.signature);
         if (!holds) broken += 1;
         content = {
           sha256: attestation.content.sha256,
@@ -136,7 +152,7 @@ export async function auditTopic(topicId: string): Promise<AuditReport> {
   }
   return {
     topicId,
-    network: demoNetwork(),
+    network,
     messages: rows.length,
     foreign,
     entries,

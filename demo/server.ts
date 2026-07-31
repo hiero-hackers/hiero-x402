@@ -59,34 +59,12 @@ function runAgent({ humanApproval }: { humanApproval: boolean }): AgentRun {
 
 const NETWORK = demoNetwork();
 const PAY_TO = requireEnv("PAY_TO_ACCOUNT");
-await confirmPayToAccount(PAY_TO); // refuses a payTo that can never settle (receiver-sig trap)
-
-// Wallet-signed approvals (optional): resolve the approver's on-chain key
-// once, so the hub can verify consent signatures without further lookups.
 const APPROVER_ID = process.env.APPROVER_ACCOUNT_ID ?? "";
 const WALLET_PROJECT_ID = process.env.WALLETCONNECT_PROJECT_ID ?? "";
-const approverKey = APPROVER_ID === "" ? undefined : await fetchAccountPublicKey(APPROVER_ID);
-if (APPROVER_ID !== "" && approverKey === undefined) {
-  // Log the env var's NAME, never its value (CodeQL: clear-text logging).
-  console.warn(
-    "[server] could not resolve APPROVER_ACCOUNT_ID's key from the mirror — wallet approvals are off this run",
-  );
-}
 const VERIFY_BEFORE_SERVE = process.env.VERIFY_BEFORE_SERVE === "1";
 const FACILITATOR_URL = process.env.FACILITATOR_URL ?? "http://localhost:4020";
-
-// Content commitments (optional): a dedicated signing identity, resolved
-// against the mirror like every other demo key. Absent → paid responses are
-// served uncommitted and the receipt says so honestly.
 const CONTENT_SIGNER_ID = process.env.CONTENT_SIGNER_ACCOUNT_ID ?? "";
 const CONTENT_SIGNER_KEY = process.env.CONTENT_SIGNER_KEY ?? "";
-const contentSigner =
-  CONTENT_SIGNER_ID !== "" && CONTENT_SIGNER_KEY !== ""
-    ? {
-        accountId: CONTENT_SIGNER_ID,
-        key: await resolvePrivateKey(CONTENT_SIGNER_ID, CONTENT_SIGNER_KEY),
-      }
-    : undefined;
 if ((CONTENT_SIGNER_ID === "") !== (CONTENT_SIGNER_KEY === "")) {
   // Name the env vars, never their values (CodeQL: clear-text logging).
   console.warn(
@@ -94,6 +72,29 @@ if ((CONTENT_SIGNER_ID === "") !== (CONTENT_SIGNER_KEY === "")) {
       "content commitments are off this run",
   );
 }
+
+// Three independent mirror lookups, one round-trip of boot latency:
+// the payTo gate (refuses a payTo that can never settle — receiver-sig
+// trap), the approver's on-chain key (so the hub verifies consent without
+// further lookups), and the content-signing identity (resolved against
+// the mirror like every other demo key; absent → paid responses are
+// served uncommitted and the receipt says so honestly).
+const [, approverKey, contentSignerKey] = await Promise.all([
+  confirmPayToAccount(PAY_TO),
+  APPROVER_ID === "" ? undefined : fetchAccountPublicKey(APPROVER_ID),
+  CONTENT_SIGNER_ID !== "" && CONTENT_SIGNER_KEY !== ""
+    ? resolvePrivateKey(CONTENT_SIGNER_ID, CONTENT_SIGNER_KEY)
+    : undefined,
+]);
+if (APPROVER_ID !== "" && approverKey === undefined) {
+  console.warn(
+    "[server] could not resolve APPROVER_ACCOUNT_ID's key from the mirror — wallet approvals are off this run",
+  );
+}
+const contentSigner =
+  contentSignerKey !== undefined
+    ? { accountId: CONTENT_SIGNER_ID, key: contentSignerKey }
+    : undefined;
 
 const app = createApp({
   network: NETWORK,
@@ -107,6 +108,9 @@ const app = createApp({
     : {}),
   ...(WALLET_PROJECT_ID !== "" ? { walletProjectId: WALLET_PROJECT_ID } : {}),
   ...(contentSigner !== undefined ? { contentSigner } : {}),
+  ...(process.env.ATTEST_TOPIC_ID !== undefined
+    ? { attestTopicId: process.env.ATTEST_TOPIC_ID }
+    : {}),
 });
 
 serve({ fetch: app.fetch, port: SERVER_PORT }, () => {
