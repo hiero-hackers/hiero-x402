@@ -23,6 +23,7 @@ import { Buffer } from "node:buffer";
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { formatBaseUnits } from "@hiero-hackers/hiero-payment-requests";
+import { HEDERA_TESTNET_USDC } from "@x402/hedera";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { createClientHederaSigner } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
@@ -68,10 +69,35 @@ const httpClient = new x402HTTPClient(
  *  glance. The wire stays atomic; only the narration converts, and the
  *  decimal split comes from the library, not hand-rolled bigint math. */
 function fmtAmount(amount: bigint, asset: string): string {
-  if (asset !== HBAR_ASSET) {
-    return `${amount.toLocaleString("en-US")} base units of token ${asset}`;
+  if (asset === HBAR_ASSET) {
+    return `${formatBaseUnits(amount, 8)} ℏ (${amount.toLocaleString("en-US")} tinybar)`;
   }
-  return `${formatBaseUnits(amount, 8)} ℏ (${amount.toLocaleString("en-US")} tinybar)`;
+  if (asset === HEDERA_TESTNET_USDC) {
+    // The one token this demo knows the decimals of — the official testnet USDC.
+    return `${formatBaseUnits(amount, 6)} USDC (${amount.toLocaleString("en-US")} base units)`;
+  }
+  return `${amount.toLocaleString("en-US")} base units of token ${asset}`;
+}
+
+/**
+ * Plain words for the wire's failure codes — a demo that dumps raw JSON at
+ * the exact moment something goes wrong has stopped explaining itself.
+ */
+function explainPaymentFailure(code: unknown, asset: string): string | undefined {
+  if (typeof code !== "string") return undefined;
+  if (code.includes("preflight")) {
+    return asset === HBAR_ASSET
+      ? "the facilitator's preflight refused this payment before submitting anything on-chain — " +
+          "check the agent's HBAR balance and that the payTo account can receive"
+      : `the facilitator's preflight refused this TOKEN payment before anything went on-chain: ` +
+          `to settle in this token the AGENT must hold a balance of ${asset} ` +
+          `AND the payTo account must be associated with it. Fund the agent from a testnet ` +
+          `USDC faucet, associate payTo, or pick an HBAR route.`;
+  }
+  if (code.includes("insufficient")) {
+    return "the payer's balance cannot cover the quote — top the agent up from the faucet";
+  }
+  return undefined;
 }
 
 const url = `${SERVER_URL}${RESOURCE}?symbol=${encodeURIComponent(SYMBOL)}`;
@@ -97,32 +123,36 @@ console.log(
     `the agent pays the price, never the fee)`,
 );
 
-// The agent's own spend policy — a cap the operator (or the hub's input)
-// sets in atomic units. Checked BEFORE the approval gate: a quote over the
-// cap is not worth a human's time, let alone a signature. Exit 4 is the
-// policy-refusal code (0 paid · 2 unverified · 3 declined · 4 over cap).
+// The agent's own spend policy — a cap in the atomic units of ONE asset
+// (MAX_AGENT_PAYMENT_ASSET, default HBAR; the hub sets both from its
+// dropdown). Checked BEFORE the approval gate: a quote over the cap is
+// not worth a human's time, let alone a signature. A quote in a DIFFERENT
+// asset than the cap's denomination is never compared — units first.
+// Exit 4 is the policy-refusal code (0 paid · 2 unverified · 3 declined ·
+// 4 over cap).
 const MAX_PAYMENT = process.env.MAX_AGENT_PAYMENT ?? "";
+const MAX_PAYMENT_ASSET = process.env.MAX_AGENT_PAYMENT_ASSET ?? HBAR_ASSET;
 if (MAX_PAYMENT !== "" && /^\d+$/.test(MAX_PAYMENT)) {
-  if (accepted.asset !== HBAR_ASSET) {
-    // The cap is denominated in tinybar — comparing it to a TOKEN quote
-    // (USDC base units) would be unit soup. Say so rather than mis-apply.
+  if (accepted.asset !== MAX_PAYMENT_ASSET) {
     console.log(
-      "[agent]     spend policy: cap is HBAR-denominated — not applied to this token quote",
+      `[agent]     spend policy: cap is denominated in ` +
+        `${MAX_PAYMENT_ASSET === HBAR_ASSET ? "HBAR" : `token ${MAX_PAYMENT_ASSET}`} — ` +
+        `this quote is in a different asset, so the cap is not applied`,
     );
   } else if (BigInt(accepted.amount) > BigInt(MAX_PAYMENT)) {
     console.log(
       `[agent] 2 · REFUSED by spend policy — the quote exceeds the cap of ` +
-        `${fmtAmount(BigInt(MAX_PAYMENT), accepted.asset)}; nothing signed, nothing spent`,
+        `${fmtAmount(BigInt(MAX_PAYMENT), MAX_PAYMENT_ASSET)}; nothing signed, nothing spent`,
     );
     process.exit(4);
   } else {
     console.log(
-      `[agent]     spend policy ✓ quote is within the cap of ${fmtAmount(BigInt(MAX_PAYMENT), accepted.asset)}`,
+      `[agent]     spend policy ✓ quote is within the cap of ${fmtAmount(BigInt(MAX_PAYMENT), MAX_PAYMENT_ASSET)}`,
     );
   }
 } else if (MAX_PAYMENT !== "") {
   console.warn(
-    "[agent] MAX_AGENT_PAYMENT must be a whole number of tinybar (5 ℏ = 500000000) — cap ignored",
+    "[agent] MAX_AGENT_PAYMENT must be a whole number of atomic units (5 ℏ = 500000000) — cap ignored",
   );
 }
 
@@ -196,10 +226,18 @@ const result = await httpClient.processResponse(paid);
 const settle =
   result.header !== undefined && "transaction" in result.header ? result.header : undefined;
 if (result.paymentStatus !== "settled" || settle === undefined) {
+  // Diagnose in plain words FIRST; the raw wire follows for anyone digging.
+  const errorCode = (result.header as { error?: unknown } | undefined)?.error;
+  const why = explainPaymentFailure(errorCode, accepted.asset);
   console.error(
-    `[agent] payment did not go through (status ${result.status}, ${result.paymentStatus})\n` +
-      `[agent]   body:   ${JSON.stringify(result.body)}\n` +
-      `[agent]   header: ${JSON.stringify(result.header)}`,
+    `[agent] ✗ payment did not go through — ${typeof errorCode === "string" ? errorCode : result.paymentStatus}`,
+  );
+  if (why !== undefined) console.error(`[agent]   why: ${why}`);
+  console.error(
+    `[agent]   nothing settled on-chain; nothing was lost beyond the request itself\n` +
+      `[agent]   raw detail (status ${result.status}):\n` +
+      `[agent]     body:   ${JSON.stringify(result.body)}\n` +
+      `[agent]     header: ${JSON.stringify(result.header)}`,
   );
   process.exit(1);
 }

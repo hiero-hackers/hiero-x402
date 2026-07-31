@@ -32,9 +32,13 @@ import { createApp, type AgentRun } from "./app.js";
 function runAgent({
   humanApproval,
   maxPayment,
+  maxPaymentAsset,
+  resource,
 }: {
   humanApproval: boolean;
   maxPayment?: string;
+  maxPaymentAsset?: string;
+  resource?: string;
 }): AgentRun {
   const output = new PassThrough();
   const child = spawn("node_modules/.bin/tsx", ["--env-file=.env", "demo/agent.ts"], {
@@ -46,6 +50,8 @@ function runAgent({
       SERVER_URL: `http://localhost:${SERVER_PORT}`,
       ...(humanApproval ? { HUMAN_APPROVAL: "1" } : {}),
       ...(maxPayment !== undefined ? { MAX_AGENT_PAYMENT: maxPayment } : {}),
+      ...(maxPaymentAsset !== undefined ? { MAX_AGENT_PAYMENT_ASSET: maxPaymentAsset } : {}),
+      ...(resource !== undefined ? { RESOURCE: resource } : {}),
     },
   });
   child.stdout?.pipe(output, { end: false });

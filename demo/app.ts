@@ -55,7 +55,13 @@ export interface AppOptions {
    * deployments). With `humanApproval`, the child pauses at step 2½ until
    * `decide` relays the human's answer to its stdin.
    */
-  readonly runAgent?: (options: { humanApproval: boolean; maxPayment?: string }) => AgentRun;
+  readonly runAgent?: (options: {
+    humanApproval: boolean;
+    maxPayment?: string;
+    /** The asset the cap is denominated in (0.0.0 = HBAR, else token id). */
+    maxPaymentAsset?: string;
+    resource?: string;
+  }) => AgentRun;
   /**
    * The expected human approver for wallet-signed consent (optional).
    * Resolved by the server at boot — the account id approvals must come
@@ -278,12 +284,19 @@ export function createApp(options: AppOptions): Hono {
       return c.json({ error: "a run is already in progress — one settlement at a time" }, 409);
     }
     agentRunning = true;
-    // The hub's spend cap, validated here (digits only) — the agent
-    // enforces it before signing; garbage never reaches the child's env.
+    // The hub's run knobs, validated here — the spend cap (digits only)
+    // and the resource (CATALOG whitelist: the hub can only buy what the
+    // server actually sells); garbage never reaches the child's env.
     const maxPayment = c.req.query("maxPayment");
+    const maxPaymentAsset = c.req.query("maxPaymentAsset");
+    const resource = c.req.query("resource");
     const run = runAgent({
       humanApproval: c.req.query("approval") === "1",
       ...(maxPayment !== undefined && /^\d+$/.test(maxPayment) ? { maxPayment } : {}),
+      ...(maxPaymentAsset !== undefined && /^0\.0\.\d+$/.test(maxPaymentAsset)
+        ? { maxPaymentAsset }
+        : {}),
+      ...(resource !== undefined && productByPath.has(resource) ? { resource } : {}),
     });
     pendingDecision = run.decide;
     const lines = createInterface({ input: run.narration });

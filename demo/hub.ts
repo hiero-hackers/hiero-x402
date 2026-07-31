@@ -200,8 +200,8 @@ export function hubHTML(view: HubView): string {
   <header class="hero">
     <p class="eyebrow">HTTP 402 · verifiable and trustworthy settlement on Hedera</p>
     <h1>Trusted Layer of AI settlement.</h1>
-    <p>An agent discovers a x402 price on Hedera, pays it, and the settlement arrives as a mirror receipt or block proof (beta) - all independently verifiable including an HCS audit trail.
-    The transaction can be fully autonomous or with a human in the loop (hub button or wallet-signed consent).</p>
+    <p>An agent discovers a x402 price on Hedera, pays it in USDC or HBAR, and the settlement arrives as a mirror receipt or block proof (beta) - all independently verifiable including an HCS audit trail.
+    The transaction can be fully autonomous but can also be capped and require human approval (hub button or wallet-signed consent).</p>
   </header>
 
   <div class="grid">
@@ -229,7 +229,15 @@ export function hubHTML(view: HubView): string {
                    : `<span class="note">wallet-signed approval is off — set APPROVER_ACCOUNT_ID and WALLETCONNECT_PROJECT_ID in .env</span>`
                }
              </div>
-             <label class="toggle" style="margin-top:.6rem"><span>max spend, ℏ (optional):</span>
+             <label class="toggle" style="margin-top:.6rem"><span>pay for:</span>
+               <select id="run-resource"
+                 style="background:rgba(255,255,255,.04);border:1px solid var(--line-2);border-radius:7px;color:var(--text);font-family:var(--mono);font-size:.8rem;padding:.3rem .55rem">
+                 <option value="/data/spot-price" data-unit="ℏ" data-decimals="8" data-asset="0.0.0" selected>spot price — 0.05 ℏ (HBAR)</option>
+                 <option value="/data/ohlc" data-unit="ℏ" data-decimals="8" data-asset="0.0.0">OHLC candle — 0.10 ℏ (HBAR)</option>
+                 <option value="/data/fx" data-unit="USDC" data-decimals="6" data-asset="0.0.429274">FX rate — 0.01 USDC (HTS token)</option>
+               </select>
+             </label>
+             <label class="toggle" style="margin-top:.6rem"><span>max spend, <span id="max-payment-unit">ℏ</span> (optional):</span>
                <input id="max-payment" type="text" inputmode="decimal" placeholder="e.g. 0.5"
                  style="background:rgba(255,255,255,.04);border:1px solid var(--line-2);border-radius:7px;color:var(--text);font-family:var(--mono);font-size:.8rem;padding:.3rem .55rem;width:9.5rem">
              </label>
@@ -589,6 +597,14 @@ export function hubHTML(view: HubView): string {
     radio.addEventListener("change", syncHumanStage);
   });
   syncHumanStage();
+  // The spend-cap label follows the chosen asset — a ℏ cap on a USDC
+  // purchase would be unit soup, so the input renames itself instead.
+  var unitSel = document.getElementById("run-resource");
+  var unitLabel = document.getElementById("max-payment-unit");
+  if (unitSel && unitLabel) unitSel.addEventListener("change", function () {
+    var opt = unitSel.selectedOptions && unitSel.selectedOptions[0];
+    if (opt) unitLabel.textContent = opt.getAttribute("data-unit") || "ℏ";
+  });
   button.addEventListener("click", function () {
     button.disabled = true;
     button.textContent = "Running the agent…";
@@ -612,14 +628,23 @@ export function hubHTML(view: HubView): string {
     // cap (atomic units) the agent enforces BEFORE anything is signed.
     var params = [];
     if (mode !== "auto") params.push("approval=1");
-    // The human types ℏ; the wire stays atomic. String math, no floats —
-    // "0.5" → "50000000", "5" → "500000000" (8 decimals, exact).
+    // Which resource the agent buys — the bounty's own sentence, on a
+    // dropdown: settled in HBAR or USDC. The server whitelists the value.
+    var resourceSel = document.getElementById("run-resource");
+    var chosen = resourceSel && resourceSel.selectedOptions && resourceSel.selectedOptions[0];
+    if (resourceSel && resourceSel.value) params.push("resource=" + encodeURIComponent(resourceSel.value));
+    // The human types the CHOSEN asset's unit (ℏ or USDC — the label
+    // follows the dropdown); the wire stays atomic in that asset's
+    // decimals. String math, no floats — "0.5" ℏ → "50000000".
+    var capDecimals = chosen ? parseInt(chosen.getAttribute("data-decimals"), 10) : 8;
+    var capAsset = chosen ? chosen.getAttribute("data-asset") : "0.0.0";
     var capInput = document.getElementById("max-payment");
     var capRaw = capInput ? capInput.value.trim() : "";
-    if (/^\\d+(\\.\\d{1,8})?$/.test(capRaw)) {
+    if (new RegExp("^\\\\d+(\\\\.\\\\d{1," + capDecimals + "})?$").test(capRaw)) {
       var capParts = capRaw.split(".");
-      var tinybar = (capParts[0] + (capParts[1] || "").padEnd(8, "0")).replace(/^0+(?=\\d)/, "");
-      params.push("maxPayment=" + tinybar);
+      var atomic = (capParts[0] + (capParts[1] || "").padEnd(capDecimals, "0")).replace(/^0+(?=\\d)/, "");
+      params.push("maxPayment=" + atomic);
+      params.push("maxPaymentAsset=" + encodeURIComponent(capAsset));
     }
     var events = new EventSource("/demo/run" + (params.length ? "?" + params.join("&") : ""));
     events.addEventListener("line", function (event) {
