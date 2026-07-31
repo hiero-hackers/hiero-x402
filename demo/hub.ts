@@ -33,9 +33,14 @@ export function hubHTML(view: HubView): string {
     desc: string,
   ): string => {
     const inner = `<span class="tag">${tag}</span><h3>${title}</h3><p>${desc}</p>`;
+    const name = file.replace(".html", "");
+    // The empty copy names the exact command that fills THIS card — "run
+    // the demo" alone left the block-proof slot looking broken when only
+    // the agent had run.
+    const fillsIt = kind === "verified" ? "npm run provenance" : "run the agent";
     return view.receiptFresh(file)
-      ? `<a class="rcard ${kind}" href="/receipts/${file.replace(".html", "")}">${inner}<span class="open">Open receipt ↓</span></a>`
-      : `<div class="rcard ${kind} empty">${inner}<span class="open">none from this session yet — run the demo</span></div>`;
+      ? `<a class="rcard ${kind}" data-name="${name}" href="/receipts/${name}">${inner}<span class="open">Open receipt ↓</span></a>`
+      : `<div class="rcard ${kind} empty" data-name="${name}">${inner}<span class="open">none from this session yet — ${fillsIt}</span></div>`;
   };
   return `<!doctype html>
 <html lang="en">
@@ -303,7 +308,7 @@ export function hubHTML(view: HubView): string {
     setTimeout(fitFrame, 600);
   });
   window.addEventListener("resize", fitFrame);
-  document.querySelectorAll("a.rcard").forEach(function (card) {
+  function bindCard(card) {
     card.addEventListener("click", function (e) {
       e.preventDefault();
       var href = card.getAttribute("href");
@@ -317,10 +322,31 @@ export function hubHTML(view: HubView): string {
       viewer.classList.add("on");
       viewer.scrollIntoView({ behavior: "smooth", block: "nearest" });
     });
-  });
+  }
+  document.querySelectorAll("a.rcard").forEach(bindCard);
   document.getElementById("viewer-close").addEventListener("click", function () {
     viewer.classList.remove("on");
   });
+
+  // The cards render server-side at page load — a receipt written by a run
+  // AFTER that must light its card without a manual reload. Each empty
+  // card re-checks its own endpoint; on 200 it becomes the live link.
+  function refreshReceiptCards() {
+    document.querySelectorAll(".rcard.empty").forEach(function (card) {
+      var name = card.getAttribute("data-name");
+      if (!name) return;
+      fetch("/receipts/" + name, { method: "GET", cache: "no-store" }).then(function (r) {
+        if (!r.ok) return;
+        var link = document.createElement("a");
+        link.className = card.className.replace(" empty", "");
+        link.setAttribute("data-name", name);
+        link.setAttribute("href", "/receipts/" + name);
+        link.innerHTML = card.innerHTML.replace(/<span class="open">[^<]*<\\/span>/, '<span class="open">Open receipt ↓</span>');
+        card.replaceWith(link);
+        bindCard(link);
+      }).catch(function () { /* next refresh retries */ });
+    });
+  }
 
   // The audit view: /demo/audit runs the SAME re-verification as the CLI —
   // the "holds" flag below is the server-side auditor's own signature
@@ -567,7 +593,10 @@ export function hubHTML(view: HubView): string {
     events.addEventListener("challenge", function (event) {
       pausedTerms = event.data;
     });
-    events.addEventListener("receipt", function () { sawReceipt = true; });
+    events.addEventListener("receipt", function () {
+      sawReceipt = true;
+      refreshReceiptCards(); // the artifact just landed — light its card now
+    });
     events.addEventListener("settled", function (event) { currentTx = event.data; });
     events.addEventListener("exit", function (event) { exitCode = parseInt(event.data, 10); });
     events.addEventListener("done", function () {
@@ -606,6 +635,7 @@ export function hubHTML(view: HubView): string {
       }
       status.className = "status on done";
       statusText.textContent = "Complete — settlement verified. See the fresh receipt below.";
+      refreshReceiptCards(); // belt and braces — the receipt event already fired
       if (proofUrl) {
         hint.innerHTML =
           'Settled — <a href="' + esc(proofUrl) + '" target="_blank">check the transaction on HashScan ↗</a>';
