@@ -3,8 +3,9 @@
  * The verdicts, one fixture each — every way a settlement claim can be true
  * or false, judged offline against canned mirror bodies.
  */
+import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
-import { verifySettlement } from "../src/index.js";
+import { readPaymentResponseHeader, verifySettlement } from "../src/index.js";
 import {
   CONSENSUS_AT,
   HBAR_REQUEST,
@@ -116,5 +117,32 @@ describe("verifySettlement", () => {
       verifySettlement(mainnet, SETTLEMENT_ID, REFERENCE, { fetchImpl }),
     ).rejects.toThrow(/enforced in code/);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("readPaymentResponseHeader", () => {
+  const encode = (body: unknown): string => Buffer.from(JSON.stringify(body)).toString("base64");
+
+  it("reads the v2 header, normalizes the id to REST form, and keeps optional facts", () => {
+    const value = encode({ success: true, transaction: SETTLEMENT_ID, payer: "0.0.42" });
+    const settle = readPaymentResponseHeader((name) =>
+      name === "payment-response" ? value : null,
+    );
+    expect(settle).toEqual({ transactionId: SETTLEMENT_ID_REST, payer: "0.0.42", success: true });
+  });
+
+  it("accepts the legacy x- spelling, and a bare transaction with no extras", () => {
+    const value = encode({ transaction: SETTLEMENT_ID });
+    const settle = readPaymentResponseHeader((name) =>
+      name === "x-payment-response" ? value : null,
+    );
+    expect(settle).toEqual({ transactionId: SETTLEMENT_ID_REST });
+  });
+
+  it("answers undefined for absence, malformed base64/JSON, and empty transactions", () => {
+    expect(readPaymentResponseHeader(() => null)).toBeUndefined();
+    expect(readPaymentResponseHeader(() => "not base64 json {{")).toBeUndefined();
+    expect(readPaymentResponseHeader(() => encode({ success: true }))).toBeUndefined();
+    expect(readPaymentResponseHeader(() => encode({ transaction: "" }))).toBeUndefined();
   });
 });

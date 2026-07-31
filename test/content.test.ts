@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
+import { PrivateKey, PublicKey } from "@hiero-ledger/sdk";
+import { Buffer } from "node:buffer";
 import {
   CONTENT_COMMITMENT_VERSION,
+  CONTENT_SHA256_HEADER,
   commitmentReference,
+  contentCommitmentHeaders,
   contentCommitmentMessage,
   isSha256Hex,
   parseContentCommitment,
+  parseContentCommitmentHeaders,
   sha256Hex,
 } from "../src/index.js";
 
@@ -44,6 +49,45 @@ describe("isSha256Hex", () => {
     expect(isSha256Hex("a".repeat(64))).toBe(true);
     expect(isSha256Hex("A".repeat(64))).toBe(false); // one canonical case
     expect(isSha256Hex("a".repeat(63))).toBe(false);
+  });
+});
+
+describe("contentCommitmentHeaders ⇄ parseContentCommitmentHeaders", () => {
+  it("round-trips producer to consumer, and the signature verifies over the message", () => {
+    const key = PrivateKey.generateED25519();
+    const headers = contentCommitmentHeaders({
+      ...FACTS,
+      signer: "0.0.7000009",
+      sign: (message) => key.sign(message),
+    });
+    const parsed = parseContentCommitmentHeaders((name) => headers[name] ?? null);
+    expect(parsed).toEqual({
+      sha256: FACTS.sha256,
+      signer: "0.0.7000009",
+      signatureB64: headers["x-content-signature"],
+    });
+    // The signature is over the canonical message — any consumer can check.
+    expect(
+      PublicKey.fromString(key.publicKey.toStringRaw()).verify(
+        Buffer.from(contentCommitmentMessage(FACTS), "utf8"),
+        Buffer.from(parsed!.signatureB64, "base64"),
+      ),
+    ).toBe(true);
+  });
+
+  it("a partial commitment is no commitment", () => {
+    const key = PrivateKey.generateED25519();
+    const headers = contentCommitmentHeaders({
+      ...FACTS,
+      signer: "0.0.7000009",
+      sign: (message) => key.sign(message),
+    });
+    expect(parseContentCommitmentHeaders(() => null)).toBeUndefined();
+    expect(
+      parseContentCommitmentHeaders((name) =>
+        name === CONTENT_SHA256_HEADER ? null : (headers[name] ?? null),
+      ),
+    ).toBeUndefined();
   });
 });
 

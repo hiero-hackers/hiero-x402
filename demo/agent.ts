@@ -27,12 +27,10 @@ import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { createClientHederaSigner } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import {
-  CONTENT_SHA256_HEADER,
-  CONTENT_SIGNATURE_HEADER,
-  CONTENT_SIGNER_HEADER,
   HBAR_ASSET,
   commitmentReference,
   contentCommitmentMessage,
+  parseContentCommitmentHeaders,
   settlementReceiptHTML,
   sha256Hex,
   verdictLine,
@@ -245,19 +243,17 @@ if (verdict.mirrorUrl !== undefined) console.log(`[agent]     mirror record: ${v
 // signer's on-chain key from the mirror — never against the header's own
 // claims. No commitment is honest and allowed; a broken one is loud.
 const contentSha = sha256Hex(receivedBytes);
-const commitSha = paid.headers.get(CONTENT_SHA256_HEADER);
-const commitSigner = paid.headers.get(CONTENT_SIGNER_HEADER);
-const commitSignature = paid.headers.get(CONTENT_SIGNATURE_HEADER);
+const presented = parseContentCommitmentHeaders((name) => paid.headers.get(name));
 // The signed reference — derived by the SAME convention function the
 // server middleware uses (src/content.ts commitmentReference), so the two
 // parties can never disagree about which form was signed.
 const signedReference = commitmentReference(url);
 let content: DeliveredContent = { sha256: contentSha, reference: signedReference };
-if (commitSha !== null && commitSigner !== null && commitSignature !== null) {
+if (presented !== undefined) {
   const committed =
-    commitSha === contentSha &&
+    presented.sha256 === contentSha &&
     (await verifyAccountSignature(
-      commitSigner,
+      presented.signer,
       contentCommitmentMessage({
         // The canonical REST-normalized id — the same form the server
         // signed, the verdict carries, and the topic attestation records.
@@ -265,17 +261,21 @@ if (commitSha !== null && commitSigner !== null && commitSignature !== null) {
         reference: signedReference,
         sha256: contentSha,
       }),
-      commitSignature,
+      presented.signatureB64,
     ));
   content = {
     sha256: contentSha,
     reference: signedReference,
-    commitment: { signer: commitSigner, signatureB64: commitSignature, verified: committed },
+    commitment: {
+      signer: presented.signer,
+      signatureB64: presented.signatureB64,
+      verified: committed,
+    },
   };
   console.log(
     committed
-      ? `[agent] 6½ · content COMMITTED — ${commitSigner} signed sha-256 ${contentSha.slice(0, 16)}… against this settlement (key mirror-checked)`
-      : `[agent] 6½ · content commitment BROKEN — presented by ${commitSigner} but it does not verify; treating the data as unattested`,
+      ? `[agent] 6½ · content COMMITTED — ${presented.signer} signed sha-256 ${contentSha.slice(0, 16)}… against this settlement (key mirror-checked)`
+      : `[agent] 6½ · content commitment BROKEN — presented by ${presented.signer} but it does not verify; treating the data as unattested`,
   );
 } else {
   console.log(

@@ -18,6 +18,7 @@
  * (`MatchOptions.correlate`) and was upstreamed as `byTransactionId` in
  * payment-requests v0.1.2 — this integration fed the library a feature.
  */
+import { Buffer } from "node:buffer";
 import {
   byTransactionId,
   fromReceipt,
@@ -50,6 +51,36 @@ export interface SettlementVerdict {
    *  themselves. Present on the mirror path once the mirror knows the
    *  transaction; absent on the block-proof path (no mirror is consulted). */
   readonly mirrorUrl?: string;
+}
+
+/**
+ * The x402 settlement, read off a paid response — the ONE owner of where
+ * it lives (`payment-response`, with the legacy `x-payment-response`
+ * spelling accepted) and how it decodes (base64 JSON; malformed →
+ * undefined, never a throw mid-response). The transaction id comes back
+ * REST-normalized — this repo's one canonical spelling — ready to hand
+ * straight to `verifySettlement`. The accessor keeps it platform-neutral.
+ */
+export function readPaymentResponseHeader(
+  header: (name: string) => string | null,
+): { transactionId: string; payer?: string; success?: boolean } | undefined {
+  const encoded = header("payment-response") ?? header("x-payment-response");
+  if (encoded === null) return undefined;
+  try {
+    const decoded = JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as {
+      success?: boolean;
+      transaction?: unknown;
+      payer?: string;
+    };
+    if (typeof decoded.transaction !== "string" || decoded.transaction === "") return undefined;
+    return {
+      transactionId: restTransactionId(decoded.transaction),
+      ...(decoded.payer !== undefined ? { payer: decoded.payer } : {}),
+      ...(decoded.success !== undefined ? { success: decoded.success } : {}),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export interface VerifyOptions {

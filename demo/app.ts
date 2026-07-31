@@ -27,13 +27,10 @@ import type { RoutesConfig } from "@x402/core/server";
 import { ExactHederaScheme } from "@x402/hedera/exact/server";
 import { paymentMiddleware } from "@x402/hono";
 import {
-  CONTENT_SHA256_HEADER,
-  CONTENT_SIGNATURE_HEADER,
-  CONTENT_SIGNER_HEADER,
   MIRROR_HOSTS,
   commitmentReference,
-  contentCommitmentMessage,
-  restTransactionId,
+  contentCommitmentHeaders,
+  readPaymentResponseHeader,
   sha256Hex,
   toPaymentRequirements,
   verifySettlement,
@@ -155,34 +152,9 @@ function verifyConsent(publicKey: string, terms: string, signatureB64: string): 
   );
 }
 
-/**
- * The settlement, read off a response — the ONE owner of where it lives
- * (`payment-response`, with the legacy `x-payment-response` spelling
- * accepted) and how it decodes (base64 JSON; malformed → undefined, never
- * a crash mid-response). The transaction id comes back REST-normalized —
- * the repo's one canonical spelling.
- */
-function readSettlement(
-  headers: Headers,
-): { transactionId: string; payer?: string; success?: boolean } | undefined {
-  const header = headers.get("payment-response") ?? headers.get("x-payment-response");
-  if (header === null) return undefined;
-  try {
-    const decoded = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as {
-      success?: boolean;
-      transaction?: unknown;
-      payer?: string;
-    };
-    if (typeof decoded.transaction !== "string" || decoded.transaction === "") return undefined;
-    return {
-      transactionId: restTransactionId(decoded.transaction),
-      ...(decoded.payer !== undefined ? { payer: decoded.payer } : {}),
-      ...(decoded.success !== undefined ? { success: decoded.success } : {}),
-    };
-  } catch {
-    return undefined;
-  }
-}
+/** The library's settlement-header reader, bound to fetch Headers. */
+const readSettlement = (headers: Headers): ReturnType<typeof readPaymentResponseHeader> =>
+  readPaymentResponseHeader((name) => headers.get(name));
 
 export function createApp(options: AppOptions): Hono {
   const { network, payTo, checkoutBase } = options;
@@ -504,19 +476,15 @@ export function createApp(options: AppOptions): Hono {
       // Buffer ONCE: this body serves both the hash and the client (a
       // clone() would tee the stream and buffer it twice per paid 200).
       const bytes = Buffer.from(await res.arrayBuffer());
-      const sha256 = sha256Hex(bytes);
-      const message = contentCommitmentMessage({
+      const headers = new Headers(res.headers);
+      const commitment = contentCommitmentHeaders({
         transactionId: settle.transactionId,
         reference: commitmentReference(c.req.url),
-        sha256,
+        sha256: sha256Hex(bytes),
+        signer: contentSigner.accountId,
+        sign: (message) => contentSigner.key.sign(message),
       });
-      const signature = Buffer.from(contentSigner.key.sign(Buffer.from(message, "utf8"))).toString(
-        "base64",
-      );
-      const headers = new Headers(res.headers);
-      headers.set(CONTENT_SHA256_HEADER, sha256);
-      headers.set(CONTENT_SIGNER_HEADER, contentSigner.accountId);
-      headers.set(CONTENT_SIGNATURE_HEADER, signature);
+      for (const [name, value] of Object.entries(commitment)) headers.set(name, value);
       c.res = new Response(bytes, { status: res.status, headers });
     });
   }

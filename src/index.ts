@@ -20,7 +20,7 @@ export {
   toPaymentRequirements,
 } from "./requirements.js";
 export type { RequirementsOptions } from "./requirements.js";
-export { verifySettlement } from "./verify.js";
+export { readPaymentResponseHeader, verifySettlement } from "./verify.js";
 export type { SettlementVerdict, VerifyOptions } from "./verify.js";
 export { verifySettlementFromBlock } from "./stream.js";
 export type { BlockSource, StreamVerifyOptions } from "./stream.js";
@@ -32,9 +32,11 @@ export {
   CONTENT_SIGNATURE_HEADER,
   CONTENT_SIGNER_HEADER,
   commitmentReference,
+  contentCommitmentHeaders,
   contentCommitmentMessage,
   isSha256Hex,
   parseContentCommitment,
+  parseContentCommitmentHeaders,
   sha256Hex,
 } from "./content.js";
 export type { ContentCommitment, DeliveredContent } from "./content.js";

@@ -107,6 +107,43 @@ export function parseContentCommitment(message: string): ContentCommitment | und
 }
 
 /**
+ * The commitment as response headers, built — the PRODUCER half of the
+ * protocol. `sign` is injected (this library ships no key handling): it
+ * receives the exact message bytes and returns the raw signature.
+ */
+export function contentCommitmentHeaders(commitment: {
+  readonly transactionId: string;
+  readonly reference: string;
+  readonly sha256: string;
+  readonly signer: string;
+  readonly sign: (message: Uint8Array) => Uint8Array;
+}): Record<string, string> {
+  const message = contentCommitmentMessage(commitment);
+  return {
+    [CONTENT_SHA256_HEADER]: commitment.sha256,
+    [CONTENT_SIGNER_HEADER]: commitment.signer,
+    [CONTENT_SIGNATURE_HEADER]: Buffer.from(commitment.sign(Buffer.from(message, "utf8"))).toString(
+      "base64",
+    ),
+  };
+}
+
+/**
+ * The commitment read OFF a response — the CONSUMER half. The accessor
+ * keeps this platform-neutral (fetch Headers, node, test stubs all fit).
+ * All three headers or nothing: a partial commitment is no commitment.
+ */
+export function parseContentCommitmentHeaders(
+  header: (name: string) => string | null,
+): { sha256: string; signer: string; signatureB64: string } | undefined {
+  const sha256 = header(CONTENT_SHA256_HEADER);
+  const signer = header(CONTENT_SIGNER_HEADER);
+  const signatureB64 = header(CONTENT_SIGNATURE_HEADER);
+  if (sha256 === null || signer === null || signatureB64 === null) return undefined;
+  return { sha256, signer, signatureB64 };
+}
+
+/**
  * What the receipt renders about the delivered content — the agent's own
  * observation (its hash of the bytes it received) plus, when the server
  * committed, the verified-or-not commitment. Kept as plain data so the
