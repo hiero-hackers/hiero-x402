@@ -78,12 +78,13 @@ demo` just boots the first two in one terminal. `npm run facilitator` and
   "human" chip on the rails appears only in approval modes. Same gate from a
   terminal: `HUMAN_APPROVAL=1 npm run e2e` (answer y/N on stdin).
 - **Wallet-signed** — the approval itself becomes verifiable: the human's
-  wallet signs the exact terms line, the hub verifies the signature against
-  the approver's on-chain key (`APPROVER_ACCOUNT_ID`, key resolved from the
-  mirror at boot) before releasing the gate, and the signed consent rides
-  into the HCS attestation — the audit trail then records WHO approved WHICH
-  terms. Needs `APPROVER_ACCOUNT_ID` + `WALLETCONNECT_PROJECT_ID` (free, from
-  cloud.reown.com) in `.env`.
+  wallet signs the exact terms under a one-time nonce the hub mints for that
+  pause, the hub verifies the signature against the approver's on-chain key
+  (`APPROVER_ACCOUNT_ID`, key resolved from the mirror at boot) before
+  releasing the gate, and the signed consent rides into the HCS attestation —
+  the audit trail then records WHO approved WHICH terms, on WHICH run, and a
+  captured signature approves nothing later. Needs `APPROVER_ACCOUNT_ID` +
+  `WALLETCONNECT_PROJECT_ID` (free, from cloud.reown.com) in `.env`.
 
 The agent still leads every step in all three: it discovered the price, and
 after approval it signs, retries, verifies against the mirror, and writes its

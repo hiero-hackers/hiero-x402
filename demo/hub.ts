@@ -557,10 +557,15 @@ export function hubHTML(view: HubView): string {
     // never flip an outcome here.
     events.addEventListener("paused", function (event) {
       humanChip().classList.add("wait");
-      pausedTerms = event.data; // verbatim — the wallet signs EXACTLY this
-      terms.textContent = event.data;
+      terms.textContent = event.data; // the human-readable terms, for display
       panel.classList.add("on");
       statusText.textContent = "Paused — the agent is waiting for YOUR approval.";
+    });
+    // The hub's one-time challenge for this pause — the wallet signs THIS
+    // verbatim, never the bare terms line (which repeats run to run and
+    // would replay); the server verifies the same string, by construction.
+    events.addEventListener("challenge", function (event) {
+      pausedTerms = event.data;
     });
     events.addEventListener("receipt", function () { sawReceipt = true; });
     events.addEventListener("settled", function (event) { currentTx = event.data; });
