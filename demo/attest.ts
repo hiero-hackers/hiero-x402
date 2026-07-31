@@ -5,7 +5,9 @@
  * Opt-in (`ATTEST_TOPIC_ID` in .env): after the agent verifies a settlement,
  * it writes a compact attestation of the VERDICT to a Hedera Consensus
  * Service topic — who was paid, how much, which transaction, what the
- * mirror said. The topic becomes an append-only, independently readable log
+ * mirror said, and (when the server committed) WHAT was served: the content
+ * hash and the server's commitment signature, re-verifiable from the log
+ * alone. The topic becomes an append-only, independently readable log
  * of every payment this agent made and checked: an auditor needs the topic
  * id, not the agent's cooperation.
  *
@@ -20,7 +22,7 @@
  */
 import { Client, TopicCreateTransaction, TopicMessageSubmitTransaction } from "@hiero-ledger/sdk";
 import type { PrivateKey } from "@x402/hedera";
-import type { SettlementVerdict } from "../src/index.js";
+import type { DeliveredContent, SettlementVerdict } from "../src/index.js";
 import { HASHSCAN_HOSTS, attestationMessage } from "../src/index.js";
 import { demoNetwork } from "./shared.js";
 
@@ -52,6 +54,7 @@ export async function attest(
   topicIdOrCreate: string,
   operator: { accountId: string; key: InstanceType<typeof PrivateKey> },
   humanConsent?: { accountId: string; terms: string; signature: string },
+  content?: DeliveredContent,
 ): Promise<AttestationResult> {
   const network = demoNetwork(); // the gate applies here too
   const bare = network.slice(network.indexOf(":") + 1);
@@ -70,7 +73,12 @@ export async function attest(
     await (
       await new TopicMessageSubmitTransaction()
         .setTopicId(topicId)
-        .setMessage(withConsent(attestationMessage(verdict), humanConsent))
+        .setMessage(
+          withConsent(
+            attestationMessage(verdict, content === undefined ? {} : { content }),
+            humanConsent,
+          ),
+        )
         .execute(client)
     ).getReceipt(client);
     return {

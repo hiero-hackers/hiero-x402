@@ -36,7 +36,12 @@ export {
   sha256Hex,
 } from "./content.js";
 export type { ContentCommitment, DeliveredContent } from "./content.js";
-export { ATTESTATION_VERSION, attestationMessage, parseAttestation } from "./attestation.js";
+export {
+  ATTESTATION_VERSION,
+  attestationCommitmentMessage,
+  attestationMessage,
+  parseAttestation,
+} from "./attestation.js";
 export {
   BlockProofError,
   InvalidRequirementsError,
@@ -44,7 +49,7 @@ export {
   UnsupportedNetworkError,
   X402Error,
 } from "./errors.js";
-export type { Attestation } from "./attestation.js";
+export type { Attestation, AttestedContent } from "./attestation.js";
 export { restTransactionId, toTransactionInfo, transactionsById } from "./mirror.js";
 export type { MirrorTx } from "./mirror.js";
 export {

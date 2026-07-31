@@ -54,6 +54,7 @@
     "facilitator": "tsx --env-file=.env demo/facilitator.ts",
     "server": "tsx --env-file=.env demo/server.ts",
     "e2e": "tsx --env-file=.env demo/agent.ts",
+    "audit": "tsx --env-file=.env demo/audit.ts",
     "screenshots": "node scripts/screenshots.mjs",
     "provenance": "tsx demo/provenance.ts"
   },
