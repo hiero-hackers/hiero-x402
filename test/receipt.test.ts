@@ -89,6 +89,93 @@ describe("settlementReceiptHTML", () => {
     expect(html).not.toContain("/api/v1/transactions/"); // no mirror is consulted on this path
   });
 
+  it("answers 'did I pay what was asked?' from the receipt alone — quoted next to settled", async () => {
+    const exact = settlementReceiptHTML(await verdictFor(5_000_000));
+    expect(exact).toContain("5000000 atomic units"); // the quote
+    expect(exact).toContain("5000000 atomic units — exact"); // the chain's answer
+    const over = settlementReceiptHTML(await verdictFor(6_000_000));
+    expect(over).toContain("6000000 atomic units — 1000000 over");
+    const under = settlementReceiptHTML(await verdictFor(4_000_000));
+    expect(under).toContain("4000000 atomic units — 1000000 short");
+  });
+
+  it("says 'nothing credited' plainly when no payment fulfils the terms", async () => {
+    const { fetchImpl } = fetchStub(undefined, 404);
+    const verdict = await verifySettlement(REQUIREMENTS, SETTLEMENT_ID, HBAR_REQUEST.reference, {
+      fetchImpl,
+    });
+    expect(settlementReceiptHTML(verdict)).toContain("nothing credited under these terms");
+  });
+
+  it("shows settled without a qualifier for late — a fact, not exact/over/short", async () => {
+    const base = await verdictFor(5_000_000);
+    const arrived = base.fulfilment as { status: string; received: bigint };
+    const html = settlementReceiptHTML({
+      ...base,
+      fulfilment: { ...arrived, status: "novel" } as never,
+    });
+    expect(html).toContain("5000000 atomic units</code>");
+  });
+
+  it("renders no content panel unless the agent has content facts to show", async () => {
+    const html = settlementReceiptHTML(await verdictFor(5_000_000));
+    expect(html).not.toContain("Delivered content");
+  });
+
+  it("keeps the content panel OUTSIDE the settlement seal's authority, in its own register", async () => {
+    const verdict = await verdictFor(5_000_000);
+    const sha = "a".repeat(64);
+    // COMMITTED — the server signed the exact bytes; non-repudiation.
+    const committed = settlementReceiptHTML(verdict, {
+      content: {
+        sha256: sha,
+        commitment: { signer: "0.0.7000009", signatureB64: "c2ln", verified: true },
+      },
+    });
+    expect(committed).toContain("Delivered content");
+    expect(committed).toContain("SERVER COMMITTED");
+    expect(committed).toContain("cannot later deny");
+    expect(committed).toContain(sha);
+    expect(committed).toContain("0.0.7000009");
+    // The honesty line: bytes-to-payment binding is not data truth.
+    expect(committed).toContain("does not make the data true");
+    // BROKEN — a claimed commitment that does not verify is loud, not hidden.
+    const broken = settlementReceiptHTML(verdict, {
+      content: {
+        sha256: sha,
+        commitment: { signer: "0.0.7000009", signatureB64: "c2ln", verified: false },
+      },
+    });
+    expect(broken).toContain("COMMITMENT BROKEN");
+    expect(broken).toContain("does NOT verify");
+    // AGENT RECORD — no commitment offered. Named for what it IS: the
+    // agent's own note. Must never read as a failure — the payment is
+    // proven either way.
+    const record = settlementReceiptHTML(verdict, { content: { sha256: sha } });
+    expect(record).toContain("AGENT RECORD");
+    expect(record).toContain("does not offer content commitments");
+    expect(record).toContain("proven either way");
+    expect(record).not.toContain("Signer");
+    expect(record).not.toContain("failed");
+  });
+
+  it("escapes attacker-controlled content facts before rendering them", async () => {
+    const verdict = await verdictFor(5_000_000);
+    const html = settlementReceiptHTML(verdict, {
+      content: {
+        sha256: `<img src=x onerror=alert(1)>`,
+        commitment: {
+          signer: `<script>alert(2)</script>`,
+          signatureB64: `"><script>alert(3)</script>`,
+          verified: true,
+        },
+      },
+    });
+    expect(html).not.toContain("<img src=x");
+    expect(html).not.toContain("<script>alert(2)</script>");
+    expect(html).not.toContain("<script>alert(3)</script>");
+  });
+
   it("omits the proof link when the mirror has no transaction, and escapes what it prints", async () => {
     const { fetchImpl } = fetchStub(undefined, 404);
     const verdict = await verifySettlement(

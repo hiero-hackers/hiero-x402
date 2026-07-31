@@ -26,7 +26,16 @@ import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
 import type { RoutesConfig } from "@x402/core/server";
 import { ExactHederaScheme } from "@x402/hedera/exact/server";
 import { paymentMiddleware } from "@x402/hono";
-import { toPaymentRequirements, verifySettlement } from "../src/index.js";
+import {
+  CONTENT_SHA256_HEADER,
+  CONTENT_SIGNATURE_HEADER,
+  CONTENT_SIGNER_HEADER,
+  MIRROR_HOSTS,
+  contentCommitmentMessage,
+  sha256Hex,
+  toPaymentRequirements,
+  verifySettlement,
+} from "../src/index.js";
 import type { SupportedNetwork } from "../src/index.js";
 import { CATALOG, productRequest } from "./shared.js";
 
@@ -55,6 +64,19 @@ export interface AppOptions {
   readonly approver?: { readonly accountId: string; readonly publicKey: string };
   /** WalletConnect project id for the hub's wallet pairing (optional). */
   readonly walletProjectId?: string;
+  /**
+   * Content-commitment signer (optional). When set, every settled data
+   * response is hashed and SIGNED against its settlement transaction —
+   * "account X served exactly these bytes for exactly that payment", the
+   * receipt's COMMITTED register, non-repudiable. This is an ATTESTATION
+   * identity, not a treasury: point it at a dedicated account holding
+   * nothing (see .env.example), so this key can commit to bytes but never
+   * move money — the server's no-payment-keys posture is preserved.
+   */
+  readonly contentSigner?: {
+    readonly accountId: string;
+    readonly key: { sign(bytes: Uint8Array): Uint8Array };
+  };
 }
 
 /** A started agent run: its narration, and — in approval mode — the gate. */
@@ -725,7 +747,8 @@ export function createApp(options: AppOptions): Hono {
   // (the bonus beat — agents keep the 402 path).
   app.get("/", (c) =>
     c.json({
-      service: "hiero-x402 demo — mock market data behind HTTP 402",
+      service:
+        "hiero-x402 demo — market data behind HTTP 402 (HBAR spot is the live network exchange rate; other feeds are mock and say so)",
       network,
       products: CATALOG.map((product) => ({
         path: product.path,
@@ -738,22 +761,98 @@ export function createApp(options: AppOptions): Hono {
     }),
   );
 
+  // Content commitment — OUTSIDE the payment middleware, so control returns
+  // here after settlement with the X-PAYMENT-RESPONSE header (and its
+  // transaction id) already on the response. Hash the exact bytes about to
+  // go out, sign (txId, path, hash), and let the signature ride response
+  // headers: the client can now hold the server to WHAT it served, not just
+  // that it was paid. No settlement header → nothing to bind → no headers.
+  const { contentSigner } = options;
+  if (contentSigner !== undefined) {
+    app.use("*", async (c, next) => {
+      await next();
+      const res = c.res;
+      if (res.status !== 200) return;
+      // v2 transport names it `payment-response`; `x-payment-response` is
+      // the legacy spelling — accept either, same as the middleware does
+      // for the request's payment header.
+      const settlement =
+        res.headers.get("payment-response") ?? res.headers.get("x-payment-response");
+      if (settlement === null) return;
+      let transactionId: string;
+      try {
+        const decoded = JSON.parse(Buffer.from(settlement, "base64").toString("utf8")) as {
+          transaction?: unknown;
+        };
+        if (typeof decoded.transaction !== "string" || decoded.transaction === "") return;
+        transactionId = decoded.transaction;
+      } catch {
+        return; // a settlement header this process can't read is not ours to sign
+      }
+      const bytes = Buffer.from(await res.clone().arrayBuffer());
+      const sha256 = sha256Hex(bytes);
+      const message = contentCommitmentMessage({ transactionId, reference: c.req.path, sha256 });
+      const signature = Buffer.from(contentSigner.key.sign(Buffer.from(message, "utf8"))).toString(
+        "base64",
+      );
+      res.headers.set(CONTENT_SHA256_HEADER, sha256);
+      res.headers.set(CONTENT_SIGNER_HEADER, contentSigner.accountId);
+      res.headers.set(CONTENT_SIGNATURE_HEADER, signature);
+    });
+  }
+
   app.use("*", paymentMiddleware(routes, x402Server));
 
-  // Deterministic mock data — a demo should be reproducible, not random.
-  app.get("/data/spot-price", (c) => {
+  // The data routes. HBAR spot is REAL — the chain's own exchange rate —
+  // because a fabricated price next to a real cryptographic seal is exactly
+  // the confusion this repo exists to end. Everything without a real source
+  // says `mock: true` in the payload itself: the content commitment binds
+  // these bytes to the payment, so the bytes must be honest about what the
+  // number is.
+  app.get("/data/spot-price", async (c) => {
     const symbol = c.req.query("symbol") ?? "HBAR";
-    return c.json({ product: "spot-price", symbol, price: mockPrice(symbol), currency: "USD" });
+    if (symbol !== "HBAR") {
+      return c.json({
+        product: "spot-price",
+        mock: true,
+        symbol,
+        price: mockPrice(symbol),
+        currency: "USD",
+      });
+    }
+    const rate = await hbarUsdRate(network);
+    if (rate === undefined) {
+      // Refusing beats fabricating: a 502 here makes the payment middleware
+      // CANCEL settlement (handler_failed), so the buyer is not charged for
+      // a price this server could not actually source.
+      return c.json({ error: "price source unreachable — not selling a made-up number" }, 502);
+    }
+    return c.json({
+      product: "spot-price",
+      mock: false,
+      symbol,
+      price: rate.price,
+      currency: "USD",
+      source: "hedera-network-exchange-rate",
+      rateExpiresAt: rate.expirationTime,
+    });
   });
   app.get("/data/fx", (c) => {
     const pair = c.req.query("pair") ?? "USD/EUR";
-    return c.json({ product: "fx", pair, rate: mockPrice(pair) / 10, currency: "USDC-priced" });
+    return c.json({
+      product: "fx",
+      mock: true,
+      pair,
+      rate: mockPrice(pair) / 10,
+      currency: "USDC-priced",
+    });
   });
   app.get("/data/ohlc", (c) => {
     const symbol = c.req.query("symbol") ?? "HBAR";
     const close = mockPrice(symbol);
     return c.json({
       product: "ohlc",
+      mock: true,
       symbol,
       open: round2(close * 0.98),
       high: round2(close * 1.03),
@@ -764,6 +863,40 @@ export function createApp(options: AppOptions): Hono {
   });
 
   return app;
+}
+
+/**
+ * The chain's own HBAR/USD rate, from the mirror's exchange-rate endpoint —
+ * the price the network itself uses to convert fees. `cent_equivalent`
+ * cents buy `hbar_equivalent` HBAR, so USD per HBAR is cents/hbars/100.
+ * Any unreadable answer is undefined — the route refuses rather than
+ * guesses.
+ */
+async function hbarUsdRate(
+  network: SupportedNetwork,
+): Promise<{ price: number; expirationTime: number } | undefined> {
+  try {
+    const response = await fetch(`${MIRROR_HOSTS[network]}/api/v1/network/exchangerate`);
+    if (!response.ok) return undefined;
+    const body = (await response.json()) as {
+      current_rate?: {
+        cent_equivalent?: number;
+        hbar_equivalent?: number;
+        expiration_time?: number;
+      };
+    };
+    const cents = body.current_rate?.cent_equivalent;
+    const hbars = body.current_rate?.hbar_equivalent;
+    if (typeof cents !== "number" || typeof hbars !== "number" || cents <= 0 || hbars <= 0) {
+      return undefined;
+    }
+    return {
+      price: Math.round((cents / hbars / 100) * 1e6) / 1e6,
+      expirationTime: body.current_rate?.expiration_time ?? 0,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function mockPrice(symbol: string): number {

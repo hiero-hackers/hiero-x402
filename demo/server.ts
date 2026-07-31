@@ -4,7 +4,11 @@
  * routes, the 402 middleware, the verify-then-serve wrapper — lives in the
  * env-free factory (app.ts) so the conformance suite can pin the wire.
  *
- * This process holds no keys.
+ * This process holds no payment keys. The one optional key it may hold —
+ * CONTENT_SIGNER_KEY — is an attestation identity for content commitments:
+ * it signs the bytes served against their settlement so the server cannot
+ * later deny what it delivered. Point it at a dedicated account holding
+ * nothing; it can commit to bytes, never move money.
  */
 import { spawn } from "node:child_process";
 import { PassThrough } from "node:stream";
@@ -16,6 +20,7 @@ import {
   demoNetwork,
   fetchAccountPublicKey,
   requireEnv,
+  resolvePrivateKey,
 } from "./shared.js";
 import { createApp, type AgentRun } from "./app.js";
 
@@ -70,6 +75,26 @@ if (APPROVER_ID !== "" && approverKey === undefined) {
 const VERIFY_BEFORE_SERVE = process.env.VERIFY_BEFORE_SERVE === "1";
 const FACILITATOR_URL = process.env.FACILITATOR_URL ?? "http://localhost:4020";
 
+// Content commitments (optional): a dedicated signing identity, resolved
+// against the mirror like every other demo key. Absent → paid responses are
+// served uncommitted and the receipt says so honestly.
+const CONTENT_SIGNER_ID = process.env.CONTENT_SIGNER_ACCOUNT_ID ?? "";
+const CONTENT_SIGNER_KEY = process.env.CONTENT_SIGNER_KEY ?? "";
+const contentSigner =
+  CONTENT_SIGNER_ID !== "" && CONTENT_SIGNER_KEY !== ""
+    ? {
+        accountId: CONTENT_SIGNER_ID,
+        key: await resolvePrivateKey(CONTENT_SIGNER_ID, CONTENT_SIGNER_KEY),
+      }
+    : undefined;
+if ((CONTENT_SIGNER_ID === "") !== (CONTENT_SIGNER_KEY === "")) {
+  // Name the env vars, never their values (CodeQL: clear-text logging).
+  console.warn(
+    "[server] CONTENT_SIGNER_ACCOUNT_ID and CONTENT_SIGNER_KEY must be set together — " +
+      "content commitments are off this run",
+  );
+}
+
 const app = createApp({
   network: NETWORK,
   payTo: PAY_TO,
@@ -81,10 +106,16 @@ const app = createApp({
     ? { approver: { accountId: APPROVER_ID, publicKey: approverKey } }
     : {}),
   ...(WALLET_PROJECT_ID !== "" ? { walletProjectId: WALLET_PROJECT_ID } : {}),
+  ...(contentSigner !== undefined ? { contentSigner } : {}),
 });
 
 serve({ fetch: app.fetch, port: SERVER_PORT }, () => {
-  console.log(`[server] listening on :${SERVER_PORT} — no keys in this process`);
+  console.log(`[server] listening on :${SERVER_PORT} — no payment keys in this process`);
+  console.log(
+    contentSigner !== undefined
+      ? `[server] content commitments ON — ${contentSigner.accountId} signs every served byte against its settlement`
+      : "[server] content commitments OFF — responses are served uncommitted (set CONTENT_SIGNER_ACCOUNT_ID/CONTENT_SIGNER_KEY)",
+  );
   console.log(`[server] network=${NETWORK} payTo=${PAY_TO} facilitator=${FACILITATOR_URL}`);
   for (const product of CATALOG) {
     const unit = product.asset.kind === "hbar" ? "tinybar" : `${product.asset.symbol} base units`;

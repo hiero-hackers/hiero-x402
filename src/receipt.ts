@@ -7,6 +7,7 @@
  * those are x402 facts, not receipt facts.
  */
 import { toHTML } from "@hiero-hackers/hiero-receipts";
+import type { DeliveredContent } from "./content.js";
 import type { SettlementVerdict } from "./verify.js";
 
 const escapeHTML = (text: string): string =>
@@ -33,12 +34,98 @@ export function verdictLine(verdict: SettlementVerdict): string {
   }
 }
 
+export interface ReceiptOptions {
+  /**
+   * What the server delivered for the payment — the agent's hash of the
+   * bytes it received, plus the server's commitment when one was presented.
+   * Rendered in its OWN panel with its OWN trust register, deliberately
+   * outside the settlement seal's authority: the seal speaks for the money,
+   * never for the content.
+   */
+  readonly content?: DeliveredContent;
+}
+
+/**
+ * The settled amount next to the quote, so "did I pay what was asked?" is
+ * answerable from this one line — the exact/excess/short qualifier restates
+ * the fulfilment in numbers rather than asking the reader to trust a word.
+ */
+function settledLine(verdict: SettlementVerdict): string {
+  const { fulfilment } = verdict;
+  if (!("received" in fulfilment)) return "nothing credited under these terms";
+  const received = `${fulfilment.received.toString()} atomic units`;
+  switch (fulfilment.status) {
+    case "paid":
+      return `${received} — exact`;
+    case "overpaid":
+      return `${received} — ${fulfilment.excess.toString()} over`;
+    case "underpaid":
+      return `${received} — ${fulfilment.shortfall.toString()} short`;
+    default:
+      return received;
+  }
+}
+
+/**
+ * The delivered-content panel — its own card, its own trust register,
+ * deliberately OUTSIDE the settlement banner: the seal's authority must not
+ * bleed onto bytes the chain never saw. Three registers, mirroring the
+ * settlement wording discipline ("verified" is reserved for cryptography):
+ * Register naming states what the panel IS, never what is missing — an
+ * absent commitment is a server feature gap, not a payment failure, and
+ * must not read like one:
+ *   SERVER COMMITTED   the server's signature verifies over the received bytes
+ *   COMMITMENT BROKEN  a commitment was claimed and does NOT verify — loud, kept
+ *   AGENT RECORD       no commitment offered — the hash is the agent's own note
+ */
+function contentPanel(content: DeliveredContent): string {
+  const { commitment } = content;
+  const register =
+    commitment === undefined
+      ? {
+          badge: "AGENT RECORD",
+          badgeClass: "mute",
+          line: "The agent&#39;s own record of the bytes it received. This server does not offer content commitments — the payment above is proven either way; the content simply carries no server signature.",
+        }
+      : commitment.verified
+        ? {
+            badge: "SERVER COMMITTED",
+            badgeClass: "commit",
+            line: "The server signed these exact bytes against this settlement — it cannot later deny serving them. Anyone holding the content can re-hash it and check.",
+          }
+        : {
+            badge: "COMMITMENT BROKEN",
+            badgeClass: "bad",
+            line: "A commitment was presented but its signature does NOT verify over the received bytes. Treat the content as unattested — and keep this artifact: a false commitment is itself evidence.",
+          };
+  const signerRows =
+    commitment === undefined
+      ? ""
+      : `
+    <div><dt>Signer</dt><dd><code>${escapeHTML(commitment.signer)}</code></dd></div>
+    <div><dt>Signature</dt><dd><code>${escapeHTML(commitment.signatureB64)}</code></dd></div>`;
+  return `<section class="x402-card x402-content">
+  <p class="x402-eyebrow">Delivered content</p>
+  <div class="x402-top">
+    <span class="x402-badge ${register.badgeClass}">${register.badge}</span>
+  </div>
+  <p class="x402-content-line">${register.line}</p>
+  <dl class="x402-meta">
+    <div><dt>Content sha-256</dt><dd><code>${escapeHTML(content.sha256)}</code></dd></div>${signerRows}
+  </dl>
+  <p class="x402-method">A commitment binds bytes to a payment. It does not make the data true — data truth would need the upstream source&#39;s own signature.</p>
+</section>`;
+}
+
 /**
  * The verdict + receipts as one printable HTML document. Everything shown is
  * derived from the *verified* verdict — never echoed from a facilitator's
  * response — so what the reader sees is what the chain said.
  */
-export function settlementReceiptHTML(verdict: SettlementVerdict): string {
+export function settlementReceiptHTML(
+  verdict: SettlementVerdict,
+  options: ReceiptOptions = {},
+): string {
   // Say HOW it was verified — the receipts carry their provenance, and the
   // banner must not claim the mirror for a block-proof verdict (or vice versa).
   const proven = verdict.receipts.some((receipt) => receipt.provenance.kind === "verified");
@@ -80,6 +167,8 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
   <dl class="x402-meta">
     <div><dt>Reference</dt><dd><code>${escapeHTML(verdict.request.reference)}</code></dd></div>
     <div><dt>Transaction</dt><dd><code>${escapeHTML(verdict.transactionId)}</code></dd></div>
+    <div><dt>Quoted</dt><dd><code>${verdict.request.amount.toString()} atomic units</code></dd></div>
+    <div><dt>Settled</dt><dd><code>${escapeHTML(settledLine(verdict))}</code></dd></div>
   </dl>
   ${
     verdict.hashscanUrl !== undefined
@@ -94,6 +183,7 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
   <p class="x402-method">${method}</p>
 </header>`;
   const bodies = verdict.receipts.map((receipt) => toHTML(receipt)).join("\n");
+  const content = options.content === undefined ? "" : `\n${contentPanel(options.content)}`;
   // ONE column for everything — the banner and the receipt bodies share the
   // same width and left edge, instead of two containers eyeballing centers.
   // hiero-receipts caps its card at 420px and ships a LIGHT card; the trailing
@@ -146,6 +236,10 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
     border:1px solid;text-transform:uppercase;font-family:var(--mono)}
   .x402-badge.ok{color:var(--proof);border-color:rgba(61,212,160,.42);background:rgba(61,212,160,.1)}
   .x402-badge.warn{color:var(--warn);border-color:rgba(243,182,77,.42);background:rgba(243,182,77,.1)}
+  .x402-badge.commit{color:var(--brand-soft);border-color:rgba(128,113,255,.42);background:rgba(128,113,255,.12)}
+  .x402-badge.bad{color:var(--danger);border-color:rgba(244,116,107,.42);background:rgba(244,116,107,.1)}
+  .x402-badge.mute{color:var(--muted);border-color:var(--line-2);background:rgba(255,255,255,.04)}
+  .x402-content-line{margin:0 0 1rem;color:var(--text);font-size:.92rem;max-width:36rem}
   .x402-chip{font-size:.68rem;letter-spacing:.08em;padding:.24rem .62rem;border-radius:6px;color:var(--brand-soft);
     border:1px solid rgba(128,113,255,.42);background:rgba(128,113,255,.12);font-family:var(--mono)}
   .x402-eyebrow{margin:0 0 .3rem;font-size:.68rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--faint)}
@@ -203,7 +297,7 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
   return `<div class="x402-wrap">
 ${theme}
 <div class="x402-brand"><span class="mark">x4</span>hiero-x402 <small>verifiable settlement</small></div>
-${banner}
+${banner}${content}
 <div class="x402-bodies">${bodies}</div>
 <footer class="x402-foot"><span>hiero-x402 · x402 on Hiero with verifiable settlement</span><span>independent · facilitator-free verification</span></footer>
 ${rcptOverride}

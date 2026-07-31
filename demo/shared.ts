@@ -4,10 +4,13 @@
  * priced resources (defined in OUR request language, then bridged to x402),
  * and the one place ports/URLs default.
  *
- * Keys are read ONLY in facilitator.ts and agent.ts — never here, never in
- * the server, never in src/.
+ * PAYMENT keys are read ONLY in facilitator.ts and agent.ts — never here,
+ * never in src/. The server may additionally hold ONE signing-only key
+ * (CONTENT_SIGNER_KEY) that attests to served bytes and can move nothing.
  */
+import { Buffer } from "node:buffer";
 import type { PaymentRequest } from "@hiero-hackers/hiero-payment-requests";
+import { PublicKey } from "@hiero-ledger/sdk";
 import { HEDERA_TESTNET_USDC, PrivateKey } from "@x402/hedera";
 import { MIRROR_HOSTS, SUPPORTED_NETWORKS, assertSupportedNetwork } from "../src/index.js";
 
@@ -99,6 +102,30 @@ export async function resolvePrivateKey(
   }
 }
 
+/**
+ * Does `signatureB64` verify as `accountId`'s ON-CHAIN key over `message`
+ * (utf8)? The key comes from the public mirror, not from the counterparty —
+ * the same posture as settlement verification: never grade homework with
+ * the student's own answer sheet. Any failure (unknown account, unreadable
+ * key, malformed signature) is a plain false — absence of proof.
+ */
+export async function verifyAccountSignature(
+  accountId: string,
+  message: string,
+  signatureB64: string,
+): Promise<boolean> {
+  const keyText = await fetchAccountPublicKey(accountId);
+  if (keyText === undefined) return false;
+  try {
+    const key = PublicKey.fromString(keyText);
+    const signature = Buffer.from(signatureB64, "base64");
+    if (signature.length === 0) return false;
+    return key.verify(Buffer.from(message, "utf8"), signature);
+  } catch {
+    return false;
+  }
+}
+
 /** The account's single on-chain public key (raw hex) from the mirror, or undefined. */
 export async function fetchAccountPublicKey(accountId: string): Promise<string | undefined> {
   const host = MIRROR_HOSTS[demoNetwork()];
@@ -178,7 +205,7 @@ export interface Product {
 export const CATALOG: readonly Product[] = [
   {
     path: "/data/spot-price",
-    label: "Spot price (mock)",
+    label: "Spot price (HBAR: live network rate; others mock)",
     amount: 5_000_000n, // 0.05 ℏ
     asset: { kind: "hbar" },
   },
