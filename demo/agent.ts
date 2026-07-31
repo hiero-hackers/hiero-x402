@@ -57,6 +57,17 @@ const httpClient = new x402HTTPClient(
   new x402Client().register("hedera:*", new ExactHederaScheme(signer)),
 );
 
+/** "0.05000000 ℏ (5,000,000 tinybar)" — amounts a human can read at a
+ *  glance. The wire stays atomic; only the narration converts. */
+function fmtAmount(amount: bigint, asset: string): string {
+  if (asset !== "0.0.0") {
+    return `${amount.toLocaleString("en-US")} base units of token ${asset}`;
+  }
+  const whole = amount / 100_000_000n;
+  const frac = (amount % 100_000_000n).toString().padStart(8, "0");
+  return `${whole.toString()}.${frac} ℏ (${amount.toLocaleString("en-US")} tinybar)`;
+}
+
 const url = `${SERVER_URL}${RESOURCE}?symbol=${encodeURIComponent(SYMBOL)}`;
 
 console.log(`[agent] 1 · GET ${url}`);
@@ -78,13 +89,14 @@ if (accepted === undefined) {
   process.exit(1);
 }
 console.log(
-  `[agent] 2 · 402: ${accepted.amount} tinybar of ${accepted.asset} → ${accepted.payTo} ` +
-    `(feePayer ${String(accepted.extra?.feePayer)} sponsors the network fee)`,
+  `[agent] 2 · 402: price ${fmtAmount(BigInt(accepted.amount), accepted.asset)} → ${accepted.payTo} ` +
+    `(feePayer ${String(accepted.extra?.feePayer)} sponsors the network fee — ` +
+    `the agent pays the price, never the fee)`,
 );
 
 if (process.env.HUMAN_APPROVAL === "1") {
   console.log(
-    `[agent] 2½ · AWAITING HUMAN APPROVAL — pay ${accepted.amount} tinybar of ${accepted.asset} ` +
+    `[agent] 2½ · AWAITING HUMAN APPROVAL — pay ${fmtAmount(BigInt(accepted.amount), accepted.asset)} ` +
       `to ${accepted.payTo} for ${RESOURCE}? (y/N)`,
   );
   const gate = await new Promise<{ approved: boolean; consent?: string }>((resolve) => {
@@ -173,6 +185,22 @@ const verdict = await verifySettlement(
   },
 );
 console.log(`[agent]     ${verdictLine(verdict)}`);
+// Say the money out loud: what the terms quoted, what the chain settled,
+// and who paid the network fee — the numbers, not just the word "paid".
+if ("received" in verdict.fulfilment) {
+  const quoted = verdict.request.amount;
+  const settled = verdict.fulfilment.received;
+  const delta =
+    settled === quoted
+      ? "exact"
+      : settled > quoted
+        ? `${(settled - quoted).toLocaleString("en-US")} over`
+        : `${(quoted - settled).toLocaleString("en-US")} short`;
+  console.log(
+    `[agent]     charged: quoted ${fmtAmount(quoted, accepted.asset)} → settled ` +
+      `${fmtAmount(settled, accepted.asset)} — ${delta}; network fee paid by the sponsor, not the agent`,
+  );
+}
 if (verdict.hashscanUrl !== undefined) console.log(`[agent]     hashscan: ${verdict.hashscanUrl}`);
 if (verdict.mirrorUrl !== undefined) console.log(`[agent]     mirror record: ${verdict.mirrorUrl}`);
 

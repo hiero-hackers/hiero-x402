@@ -48,7 +48,17 @@ const provenance = verdict.receipts[0]?.provenance;
 console.log(
   `[provenance] receipt provenance: ${provenance?.kind ?? "none"} — proof checked before a single field was believed`,
 );
-writeFileSync("verified-receipt.html", settlementReceiptHTML(verdict));
+writeFileSync(
+  "verified-receipt.html",
+  settlementReceiptHTML(verdict, {
+    // The artifact explains itself — a reader must not need the README to
+    // decode the old date or the unfamiliar network.
+    caveat:
+      "Beta demonstration: this proof is verified from a committed PREVIEWNET block " +
+      "fixture (block 467 — its real consensus date), because HIP-1056 block streams " +
+      "have not reached testnet yet. The pipeline is live; the source is the fixture.",
+  }),
+);
 console.log("[provenance] receipt written to verified-receipt.html");
 console.log("[provenance] when HIP-1056 block streams reach testnet, the x402 e2e verdict");
 console.log("[provenance] gains this provenance by swapping the source — nothing else changes.");

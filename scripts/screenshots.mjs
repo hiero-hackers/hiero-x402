@@ -9,9 +9,11 @@ import { existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+// Heights track the receipts as they grow — the delivered-content panel and
+// quoted/settled rows made them taller; a short window silently crops.
 const SHOTS = [
-  ["receipt.html", "docs/receipt.png", 920, "npm run e2e"],
-  ["verified-receipt.html", "docs/verified-receipt.png", 820, "npm run provenance"],
+  ["receipt.html", "docs/receipt.png", 1390, "npm run e2e"],
+  ["verified-receipt.html", "docs/verified-receipt.png", 1040, "npm run provenance"],
 ];
 
 mkdirSync("docs", { recursive: true });

@@ -16,7 +16,7 @@
  */
 import { Buffer } from "node:buffer";
 import { PublicKey } from "@hiero-ledger/sdk";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
 import { Hono } from "hono";
@@ -38,6 +38,7 @@ import {
   verifySettlement,
 } from "../src/index.js";
 import type { SupportedNetwork } from "../src/index.js";
+import { auditTopic } from "./audit.js";
 import { CATALOG, productRequest } from "./shared.js";
 
 export interface AppOptions {
@@ -121,6 +122,14 @@ function verifyConsent(publicKey: string, terms: string, signatureB64: string): 
 
 export function createApp(options: AppOptions): Hono {
   const { network, payTo, checkoutBase } = options;
+
+  // Receipts are SESSION artifacts: a receipt.html left on disk by an
+  // earlier session must not surface as if this server produced it — no
+  // receipt shows until a run under THIS boot writes one. mtime vs boot
+  // time is the whole check; `npm run e2e` in a terminal counts too.
+  const bootAt = Date.now();
+  const freshReceipt = (file: string): boolean =>
+    existsSync(file) && statSync(file).mtimeMs >= bootAt;
 
   const x402Server = new x402ResourceServer(
     new HTTPFacilitatorClient({ url: options.facilitatorUrl }),
@@ -216,9 +225,9 @@ export function createApp(options: AppOptions): Hono {
       desc: string,
     ): string => {
       const inner = `<span class="tag">${tag}</span><h3>${title}</h3><p>${desc}</p>`;
-      return existsSync(file)
+      return freshReceipt(file)
         ? `<a class="rcard ${kind}" href="/receipts/${file.replace(".html", "")}">${inner}<span class="open">Open receipt ↓</span></a>`
-        : `<div class="rcard ${kind} empty">${inner}<span class="open">none yet — run the demo</span></div>`;
+        : `<div class="rcard ${kind} empty">${inner}<span class="open">none from this session yet — run the demo</span></div>`;
     };
     return c.html(`<!doctype html>
 <html lang="en">
@@ -311,6 +320,17 @@ export function createApp(options: AppOptions): Hono {
     padding:.9rem 1rem;border-radius:12px;font-family:var(--mono);font-size:.74rem;line-height:1.6;
     max-height:19rem;overflow:auto;white-space:pre-wrap;word-break:break-word}
   #run-log a{color:var(--brand-soft)}
+  /* the audit view — the topic's rows, each with the auditor's own verdict */
+  .audit-row{display:flex;flex-wrap:wrap;gap:.35rem .85rem;align-items:baseline;padding:.55rem 0;
+    border-top:1px solid var(--line);font-size:.78rem;color:var(--muted);font-family:var(--mono)}
+  .audit-row:first-child{border-top:none}
+  .audit-row code{color:var(--brand-soft);word-break:break-all}
+  .audit-row.current{border-left:3px solid var(--proof);padding-left:.7rem;background:rgba(61,212,160,.05)}
+  .audit-chip{font-size:.64rem;font-weight:700;letter-spacing:.08em;padding:.14rem .5rem;border-radius:6px;
+    color:var(--proof);border:1px solid rgba(61,212,160,.42);background:rgba(61,212,160,.1);text-transform:uppercase}
+  .a-ok{color:var(--proof);font-weight:600}
+  .a-bad{color:var(--danger);font-weight:700}
+  .a-none{color:var(--faint)}
   #run-hint{font-size:.88rem;margin:.9rem 0 0;color:var(--muted)}
   table{width:100%;border-collapse:collapse;font-size:.9rem}
   thead th{text-align:left;font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
@@ -362,7 +382,7 @@ export function createApp(options: AppOptions): Hono {
   <header class="hero">
     <p class="eyebrow">HTTP 402 · verifiable and trustworthy settlement on Hedera</p>
     <h1>Trusted Layer of AI settlement.</h1>
-    <p>An agent discovers a x402 price on Hedera, pays it, and the settlement arrives as a mirror receipt or block proof (beta) - all independently verifiable.
+    <p>An agent discovers a x402 price on Hedera, pays it, and the settlement arrives as a mirror receipt or block proof (beta) - all independently verifiable including an HCS audit trail.
     The transaction can be fully autonomous or with a human in the loop (hub button or wallet-signed consent).</p>
   </header>
 
@@ -437,9 +457,15 @@ export function createApp(options: AppOptions): Hono {
       <h2>Audit trail</h2>
       <p style="margin:0;font-size:.92rem;color:var(--muted)">${
         topic !== "" && topic !== "create"
-          ? `Verdicts attested to HCS topic <a href="https://hashscan.io/testnet/topic/${esc(topic)}"><code>${esc(topic)}</code></a> — an append-only public log. Each attestation carries the content hash and the server&#39;s commitment signature, so <code>npm run audit</code> re-verifies every payment&#39;s delivered bytes straight from the mirror — no cooperation needed from agent, server, or facilitator.`
+          ? `Verdicts attested to HCS topic <a href="https://hashscan.io/testnet/topic/${esc(topic)}"><code>${esc(topic)}</code></a> — an append-only public log. Each attestation carries the content hash and the server&#39;s commitment signature, so every payment&#39;s delivered bytes re-verify straight from the mirror — no cooperation needed from agent, server, or facilitator. Same check from a terminal: <code>npm run audit</code>.`
           : `Set <code>ATTEST_TOPIC_ID</code> to attest verdicts — settlement, content hash, and the server&#39;s commitment signature — to a public HCS topic anyone can re-verify with <code>npm run audit</code>.`
-      }</p>
+      }</p>${
+        topic !== "" && topic !== "create"
+          ? `
+      <button id="audit-load" class="btn ghost" style="margin-top:1rem">↻ Read the topic — re-verify every commitment</button>
+      <div id="audit-view" style="display:none;margin-top:.9rem"></div>`
+          : ""
+      }
     </section>
   </div>
 
@@ -487,6 +513,81 @@ export function createApp(options: AppOptions): Hono {
   document.getElementById("viewer-close").addEventListener("click", function () {
     viewer.classList.remove("on");
   });
+
+  // The audit view: /demo/audit runs the SAME re-verification as the CLI —
+  // the "holds" flag below is the server-side auditor's own signature
+  // check against the on-chain key, never the agent's recorded word.
+  var auditBtn = document.getElementById("audit-load");
+  var auditView = document.getElementById("audit-view");
+  function loadAudit() {
+    if (!auditBtn) return;
+    auditBtn.disabled = true;
+    fetch("/demo/audit")
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        auditBtn.disabled = false;
+        auditView.style.display = "block";
+        if (!res.ok) {
+          auditView.innerHTML = '<div class="audit-row">' + esc(String(res.body.error || "audit failed")) + "</div>";
+          return;
+        }
+        var committed = 0;
+        function row(e, isCurrent) {
+          var sig = '<span class="a-none">no commitment — agent record only</span>';
+          if (e.content && e.content.commitment) {
+            sig = e.content.commitment.holds
+              ? '<span class="a-ok">✓ signature holds — re-verified against ' + esc(e.content.commitment.signer) + "'s on-chain key</span>"
+              : '<span class="a-bad">✗ DOES NOT HOLD — keep the evidence</span>';
+          }
+          var sha = e.content ? "<span>sha-256 " + esc(e.content.sha256.slice(0, 16)) + "…</span>" : "";
+          return '<div class="audit-row' + (isCurrent ? " current" : "") + '">' +
+            (isCurrent ? '<span class="audit-chip">this run</span>' : "") +
+            '<code>#' + e.sequence + "</code><span>" + esc(e.status.toUpperCase()) +
+            "</span><code>" + esc(e.transactionId) + "</code>" + sha + sig + "</div>";
+        }
+        // Newest first, THIS run's entry pinned on top. Broken HISTORICAL
+        // entries are the terminal auditor's business (npm run audit keeps
+        // the complete record) — the hub shows this session's story, so a
+        // past failure only surfaces here if it IS this run's.
+        var entries = res.body.entries.slice().reverse().filter(function (e) {
+          var brokenEntry = e.content && e.content.commitment && !e.content.commitment.holds;
+          return !brokenEntry || e.transactionId === currentTx;
+        });
+        if (!entries.length) {
+          auditView.innerHTML = '<div class="audit-row"><span>no attestations from this session yet — run the agent and the log fills in here</span></div>';
+          return;
+        }
+        entries.forEach(function (e) { if (e.content && e.content.commitment) committed++; });
+        var shownBroken = entries.filter(function (e) {
+          return e.content && e.content.commitment && !e.content.commitment.holds;
+        }).length;
+        var pinned = currentTx ? entries.filter(function (e) { return e.transactionId === currentTx; }) : [];
+        var others = entries.filter(function (e) { return !currentTx || e.transactionId !== currentTx; });
+        var RECENT = 3;
+        var shown = pinned.map(function (e) { return row(e, true); }).join("") +
+          others.slice(0, RECENT).map(function (e) { return row(e, false); }).join("");
+        var hidden = others.slice(RECENT);
+        var summary = '<div class="audit-row"><span>' + entries.length + " attestation(s) · " + committed +
+          " committed" + (shownBroken ? " · " + shownBroken + " broken" : "") +
+          " · read from the public mirror</span></div>";
+        if (hidden.length) {
+          shown += '<div class="audit-row"><a href="#" id="audit-more">show ' + hidden.length +
+            " older attestation(s) — the append-only history</a></div>";
+        }
+        auditView.innerHTML = shown + summary;
+        var more = document.getElementById("audit-more");
+        if (more) {
+          more.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            auditView.innerHTML =
+              pinned.map(function (e) { return row(e, true); }).join("") +
+              others.map(function (e) { return row(e, false); }).join("") + summary;
+          });
+        }
+      })
+      .catch(function () { auditBtn.disabled = false; });
+  }
+  if (auditBtn) auditBtn.addEventListener("click", loadAudit);
 
   var button = document.getElementById("run-agent");
   if (!button) return;
@@ -581,6 +682,13 @@ export function createApp(options: AppOptions): Hono {
   document.getElementById("approve-no").addEventListener("click", function () { decide(false); });
   document.getElementById("approve-wallet").addEventListener("click", function () { walletApprove(); });
   var proofUrl = null;
+  // Outcome facts read from the narration itself — the hub never assumes a
+  // run succeeded just because it ended (a declined or failed run must not
+  // dress last run's receipt up as fresh).
+  var sawReceipt = false;
+  var declined = false;
+  var exitCode = null;
+  var currentTx = null;
   function syncHumanStage() {
     var rails = document.querySelector(".rails");
     if (rails) rails.classList.toggle("with-human", runMode() !== "auto");
@@ -599,6 +707,10 @@ export function createApp(options: AppOptions): Hono {
     log.innerHTML = "";
     document.querySelectorAll("[data-rail]").forEach(function (chip) { chip.classList.remove("lit", "wait"); });
     proofUrl = null;
+    sawReceipt = false;
+    declined = false;
+    exitCode = null;
+    currentTx = null;
     pausedTerms = null;
     panel.classList.remove("on");
     var mode = runMode();
@@ -636,9 +748,18 @@ export function createApp(options: AppOptions): Hono {
         statusText.textContent = "Approved — the agent takes it from here…";
       }
       if (event.data.indexOf("declined by human") !== -1) {
+        declined = true;
         humanChip().classList.remove("wait");
         panel.classList.remove("on");
       }
+      if (event.data.indexOf("receipt written to") !== -1) sawReceipt = true;
+      var exited = event.data.match(/process exited with code (-?\\d+)/);
+      if (exited) exitCode = parseInt(exited[1], 10);
+      // The mirror-record link carries the REST-normalized settlement id —
+      // the same spelling the attestations use, so the audit view can pin
+      // THIS run's entry.
+      var mirrorTx = event.data.match(/\\/api\\/v1\\/transactions\\/(\\S+)/);
+      if (mirrorTx) currentTx = mirrorTx[1];
       var proof = event.data.match(/hashscan: (https?:\\/\\/\\S+)/);
       if (proof) proofUrl = proof[1];
     });
@@ -648,13 +769,44 @@ export function createApp(options: AppOptions): Hono {
       document.querySelectorAll('input[name="run-mode"]').forEach(function (radio) { radio.disabled = false; });
       panel.classList.remove("on");
       button.textContent = label;
+      // The outcome comes from the narration, never from "the run ended":
+      // a declined or failed run wrote NO receipt — the cards below still
+      // show the LAST successful run's artifacts, and saying so beats
+      // letting a stale PAID receipt read as this run's result.
+      if (declined) {
+        status.className = "status on";
+        statusText.textContent = "Declined — nothing signed, nothing spent. No new receipt.";
+        hint.style.display = "none";
+        return;
+      }
+      if (!sawReceipt) {
+        status.className = "status on err";
+        statusText.textContent =
+          "Run failed before writing a receipt (see the log) — any receipt below is from an earlier run.";
+        hint.style.display = "none";
+        return;
+      }
+      if (exitCode !== 0) {
+        // The agent wrote its receipt and THEN refused to call it paid —
+        // the fresh artifact below is stamped for review, not success.
+        status.className = "status on err";
+        statusText.textContent =
+          "Run ended but the settlement did NOT verify as paid — the fresh receipt below is stamped for review.";
+        hint.style.display = "none";
+        // The failed verdict was still attested — keep the audit view honest.
+        if (auditBtn) { loadAudit(); setTimeout(loadAudit, 8000); }
+        return;
+      }
       status.className = "status on done";
-      statusText.textContent = "Complete — settlement finished. See the receipt below.";
+      statusText.textContent = "Complete — settlement verified. See the fresh receipt below.";
       if (proofUrl) {
         hint.innerHTML =
           'Settled — <a href="' + esc(proofUrl) + '" target="_blank">check the transaction on HashScan ↗</a>';
       }
       hint.style.display = "block";
+      // The run just attested — refresh the audit view (twice: mirrors lag
+      // consensus by a few seconds, so the second pass catches the message).
+      if (auditBtn) { loadAudit(); setTimeout(loadAudit, 8000); }
     });
     events.onerror = function () {
       events.close();
@@ -759,13 +911,45 @@ export function createApp(options: AppOptions): Hono {
     return c.json({ ok: true });
   });
 
-  // The demo's receipt artifacts, served when present (written by the agent
-  // into the working directory; a 404 is honest before the first run).
+  // The hub's audit view — the SAME auditTopic() the CLI runs, served as
+  // JSON so the dashboard shows the log RE-VERIFIED live, not just linked.
+  // 501 is honest when no topic is configured (same posture as /demo/run).
+  app.get("/demo/audit", async (c) => {
+    const topic = process.env.ATTEST_TOPIC_ID ?? "";
+    if (topic === "" || topic === "create") {
+      return c.json({ error: "no ATTEST_TOPIC_ID configured — attestations are off" }, 501);
+    }
+    try {
+      const report = await auditTopic(topic);
+      // Session scope, same rule as the receipts: the hub presents what
+      // happened under THIS boot; the topic's full history stays one
+      // `npm run audit` away. Consensus timestamps are seconds.nanos.
+      const entries = report.entries.filter(
+        (entry) => Number(entry.consensusAt.split(".")[0]) * 1000 >= bootAt,
+      );
+      return c.json({
+        ...report,
+        entries,
+        broken: entries.filter((entry) => entry.content?.commitment?.holds === false).length,
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 502);
+    }
+  });
+
+  // The demo's receipt artifacts — served ONLY when written under this
+  // boot (see freshReceipt): a 404 before the first run of THIS session is
+  // honest, and a stale artifact from last week must never pass as today's.
   app.get("/receipts/:name", (c) => {
     const name = c.req.param("name");
     if (name !== "receipt" && name !== "verified-receipt") return c.notFound();
     const file = `${name}.html`;
-    if (!existsSync(file)) return c.notFound();
+    if (!freshReceipt(file)) {
+      return c.html(
+        `<!doctype html><meta charset="utf-8"><body style="margin:0;display:grid;place-items:center;min-height:60vh;background:#0b0a10;color:#9d97ae;font:0.95rem system-ui"><p style="max-width:28rem;text-align:center;line-height:1.6">No receipt from this session yet — run the agent first.<br><small>Artifacts left by earlier sessions are deliberately withheld: a receipt only shows for a payment that actually happened under this server.</small></p></body>`,
+        404,
+      );
+    }
     return c.html(readFileSync(file, "utf8"));
   });
 

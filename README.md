@@ -18,6 +18,13 @@ remaining distance itself: it looks the settlement up on the network's public
 mirror node, normalizes what actually landed, judges it against the original
 terms, and writes itself a receipt with the HashScan proof link.
 
+And the payment is only half the trade. The server can **commit to the
+content** it served: it signs sha-256(served bytes) against the settlement
+transaction, the agent re-verifies that signature against the signer's
+on-chain key, the receipt shows both halves in separate trust registers,
+and the HCS attestation carries the commitment onto an append-only public
+log that `npm run audit` re-verifies with no cooperation from anyone.
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -32,17 +39,22 @@ sequenceDiagram
     A->>S: retry + payment-signature (partially signed TransferTransaction)
     S->>F: /verify, then /settle
     F->>H: co-sign as fee payer + submit
-    S-->>A: 200 + data + payment-response { transactionId }
+    S-->>A: 200 + data + payment-response + x-content-* (signed content hash)
     Note over A,M: this repo's contribution
     A->>M: look the settlement up yourself
+    A->>M: resolve the content signer's on-chain key
     A->>A: fromMirror → match → verdict + receipt.html
+    A->>H: attest verdict + content hash to an HCS topic
+    Note over M: `npm run audit` re-verifies the topic — no one's cooperation needed
 ```
 
 ## Run it
 
 Two funded **ECDSA testnet** accounts ([faucet](https://portal.hedera.com/faucet)):
 one for the facilitator (sponsors network fees), one for the agent (pays).
-The resource server holds no keys at all.
+The resource server holds no payment keys — optionally one signing-only
+identity (`CONTENT_SIGNER_*`) that attests to served bytes and can move
+nothing.
 
 ```sh
 npm install            # @hiero-hackers packages come from GitHub Packages —
@@ -54,8 +66,8 @@ npm run e2e            # the agent: 402 → sign → 200 → VERIFY → receipt.
 ```
 
 (The rails stay separate processes — the facilitator holds the fee-payer
-key, the server holds none, the agent holds its own — `npm run demo` just
-boots the first two in one terminal. `npm run facilitator` and
+key, the server holds no payment keys, the agent holds its own — `npm run
+demo` just boots the first two in one terminal. `npm run facilitator` and
 `npm run server` still exist for running them apart.)
 
 **Three ways to demo it.** The hub's Run button has a run-mode selector:
@@ -86,15 +98,29 @@ HashScan link, and `receipt.html` on disk. It exits non-zero unless the
 mirror confirms the exact amount landed — data paid for on the facilitator's
 word alone is treated as not paid for.
 
-Four knobs worth knowing (all in [.env.example](.env.example)):
+Five knobs worth knowing (all in [.env.example](.env.example)):
 
+- **`CONTENT_SIGNER_ACCOUNT_ID` / `CONTENT_SIGNER_KEY`** — content
+  commitments: the server signs sha-256(served bytes) against each
+  settlement transaction, so it can never later deny WHAT it served for a
+  payment. The agent verifies the signature against the signer's on-chain
+  key from the mirror — never the header's own claims — and the receipt's
+  **Delivered content** panel says which register the run earned: `SERVER
+COMMITTED`, `COMMITMENT BROKEN` (loud — a false commitment is evidence),
+  or `AGENT RECORD` (no commitment offered; not a failure). A commitment
+  binds bytes to a payment — it does not make the data true, and the
+  receipt says so in as many words.
 - **`ATTEST_TOPIC_ID=create`** — after verifying, the agent writes the
   verdict to a **Hedera Consensus Service topic**: an append-only public
   audit log of every payment it made and checked. An auditor needs the topic
   id, not the agent's cooperation. (The reference implementation defers "HCS
   attestation" — this is that feature, live:
   [topic 0.0.9672190](https://hashscan.io/testnet/topic/0.0.9672190) holds a
-  real attested verdict from a real paid run.)
+  real attested verdict from a real paid run.) The attestation carries the
+  content hash and the server's commitment signature, and **`npm run
+audit`** re-verifies every commitment straight from the mirror — rebuild
+  the signed message from the attestation's own fields, check it against
+  the signer's on-chain key, trust nobody's flag.
 
 - **`RESOURCE=/data/fx`** — a route priced in **testnet USDC** (the official
   token id from `@x402/hedera`). Needs an agent holding testnet USDC and an
@@ -132,17 +158,19 @@ sponsored by `0.0.6502504`. Anyone can re-run the check from the transaction id.
 The receipt the agent filed for that run — the verdict, the terms, and the
 proof link in one printable document:
 
-<img src="docs/receipt.png" width="480" alt="receipt.html: 'x402 settlement — independently verified. Paid in full — the chain confirms the exact amount landed', with reference, transaction id, HashScan link, and the hiero-receipts body 'You received 0.05000000 ℏ from 0.0.6280387'" />
+<img src="docs/receipt.png" width="480" alt="receipt.html: 'x402 settlement — mirror-node record. Paid in full — the chain confirms the exact amount landed', with reference, transaction id, quoted and settled amounts, HashScan link, the Delivered content panel (SERVER COMMITTED, content sha-256, signer, signature), and the hiero-receipts body" />
 
-**The verifier caught a real discrepancy on its first live run.** Our initial
-configuration reused the facilitator's account as `payTo`; the facilitator
-reported success, but the agent's mirror check answered
-_"Underpaid — less than the required amount landed"_
-([proof](https://hashscan.io/testnet/transaction/1784633796.552851104)):
-because the receiving account also sponsored the fee, it netted the price
-**minus the fee**. Every party trusting the facilitator's word would have
-called that paid. The chain-checking agent didn't — which is the entire
-thesis of this repo, demonstrated by accident on day one.
+**The verifier is not decoration — it disagrees with the facilitator when
+the chain does.** A facilitator can report success while the recipient nets
+less than the price (fee interactions, wrong asset, wrong destination); the
+agent's mirror check classifies exactly what landed — `paid`, `underpaid`
+with the shortfall, `wrong-asset` — and refuses to call anything paid on
+another party's word ([a real underpaid verdict, on
+chain](https://hashscan.io/testnet/transaction/1784633796.552851104)). And
+the trail survives scrutiny end to end: every content commitment on the
+[public audit topic](https://hashscan.io/testnet/topic/0.0.9855803)
+re-verifies from public data alone — `npm run audit`, no cooperation from
+agent, server, or facilitator.
 
 ## Why independent verification
 
@@ -160,7 +188,10 @@ means, none by trusting another's word.
 | x402 wire, schemes, middleware, facilitator | official `@x402/core` / `@x402/hedera` / `@x402/hono` — deliberately not rebuilt    |
 | Requirements ⇄ `PaymentRequest` bridge      | [`src/requirements.ts`](src/requirements.ts)                                        |
 | Settlement → mirror → verdict               | [`src/verify.ts`](src/verify.ts) — correlation via `byTransactionId`                |
+| Content commitment schema                   | [`src/content.ts`](src/content.ts) — one canonical byte sequence, signed            |
+| Attestation wire (verdict + content)        | [`src/attestation.ts`](src/attestation.ts) — self-auditing topic messages           |
 | The receipt artifact                        | [`src/receipt.ts`](src/receipt.ts) → hiero-receipts `toHTML`                        |
+| The independent auditor                     | [`demo/audit.ts`](demo/audit.ts) — `npm run audit`, mirror-only                     |
 | Mirror access                               | `hiero-receipts/mirror-fetch` + the testnet gate ([`src/config.ts`](src/config.ts)) |
 
 ## Why Hedera (and what this does for the network)
@@ -229,7 +260,7 @@ through the _same_ `source → receiptFor → match`-shaped pipeline as the e2e.
 The receipt it emits — same pipeline as the e2e's, one rung up, and the
 provenance stamp says so:
 
-<img src="docs/verified-receipt.png" width="480" alt="verified-receipt.html: 'x402 settlement — independently verified. Paid in full', the true transaction id 11.12.2@1774994518.000002058, 'Verified against the ledger's own block proof — cryptography, not the facilitator's word', and the hiero-receipts body stamped VERIFIED: 'Cryptographically verified against the previewnet ledger (block 467)'" />
+<img src="docs/verified-receipt.png" width="480" alt="verified-receipt.html: 'x402 settlement — independently verified. Paid in full', the true transaction id 11.12.2@1774994518.000002058, 'Verified against the ledger's own block proof — cryptography, not the facilitator's word', a beta caveat naming the previewnet fixture as the source, and the hiero-receipts body stamped VERIFIED: 'Cryptographically verified against the previewnet ledger (block 467)'" />
 
 The honest caveat, stated plainly: HIP-1056 block streams are not on testnet
 yet, so this cannot verify our x402 settlement today — the fixtures are from
@@ -239,10 +270,13 @@ hiero-receipts was built around that seam.
 
 ## What it deliberately doesn't do
 
-Hold keys outside the two demo processes that must · touch mainnet (the gate
-in [`src/config.ts`](src/config.ts) refuses it, in code, everywhere) · trust
-a facilitator's word · guess (unknown outcomes are reported as exactly what
-the chain shows: underpaid with the shortfall, wrong asset, not found).
+Hold payment keys outside the two demo processes that must (the server's
+optional content-signing identity attests to bytes and can move nothing) ·
+touch mainnet (the gate in [`src/config.ts`](src/config.ts) refuses it, in
+code, everywhere) · trust a facilitator's word · claim content commitments
+make data true (they bind bytes to a payment; truth would need the upstream
+source's own signature) · guess (unknown outcomes are reported as exactly
+what the chain shows: underpaid with the shortfall, wrong asset, not found).
 
 ## Develop
 

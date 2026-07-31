@@ -10,7 +10,10 @@ import { toHTML } from "@hiero-hackers/hiero-receipts";
 import type { DeliveredContent } from "./content.js";
 import type { SettlementVerdict } from "./verify.js";
 
-const escapeHTML = (text: string): string =>
+/** HTML-escape untrusted text — ONE implementation for every server-side
+ *  artifact this repo renders (receipts here, the demo hub imports it):
+ *  an XSS-relevant helper must not exist in drifting copies. */
+export const escapeHTML = (text: string): string =>
   text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 /** One line of plain language per verdict status. */
@@ -43,7 +46,18 @@ export interface ReceiptOptions {
    * never for the content.
    */
   readonly content?: DeliveredContent;
+  /**
+   * A plain-words caveat rendered on the banner — for artifacts that need
+   * to explain themselves (a beta pipeline, a fixture-sourced proof, an
+   * old consensus date) without a README in hand. The receipt never
+   * invents one; the caller owns the honesty.
+   */
+  readonly caveat?: string;
 }
+
+/** "5000000 atomic units" — with the grammar surviving an amount of 1. */
+const atomicUnits = (amount: bigint): string =>
+  `${amount.toString()} atomic unit${amount === 1n ? "" : "s"}`;
 
 /**
  * The settled amount next to the quote, so "did I pay what was asked?" is
@@ -53,7 +67,7 @@ export interface ReceiptOptions {
 function settledLine(verdict: SettlementVerdict): string {
   const { fulfilment } = verdict;
   if (!("received" in fulfilment)) return "nothing credited under these terms";
-  const received = `${fulfilment.received.toString()} atomic units`;
+  const received = atomicUnits(fulfilment.received);
   switch (fulfilment.status) {
     case "paid":
       return `${received} — exact`;
@@ -167,7 +181,7 @@ export function settlementReceiptHTML(
   <dl class="x402-meta">
     <div><dt>Reference</dt><dd><code>${escapeHTML(verdict.request.reference)}</code></dd></div>
     <div><dt>Transaction</dt><dd><code>${escapeHTML(verdict.transactionId)}</code></dd></div>
-    <div><dt>Quoted</dt><dd><code>${verdict.request.amount.toString()} atomic units</code></dd></div>
+    <div><dt>Quoted</dt><dd><code>${atomicUnits(verdict.request.amount)}</code></dd></div>
     <div><dt>Settled</dt><dd><code>${escapeHTML(settledLine(verdict))}</code></dd></div>
   </dl>
   ${
@@ -181,6 +195,7 @@ export function settlementReceiptHTML(
       : ""
   }
   <p class="x402-method">${method}</p>
+  ${options.caveat !== undefined ? `<p class="x402-caveat">${escapeHTML(options.caveat)}</p>` : ""}
 </header>`;
   const bodies = verdict.receipts.map((receipt) => toHTML(receipt)).join("\n");
   const content = options.content === undefined ? "" : `\n${contentPanel(options.content)}`;
@@ -190,7 +205,20 @@ export function settlementReceiptHTML(
   // override <style> (source-order wins) both stretches it to the shared column
   // AND re-themes .rcpt to this document's dark instrument palette, so the
   // embedded ledger and the certificate above it read as one artifact.
-  const theme = `<style>
+  return `<div class="x402-wrap">
+${THEME}
+<div class="x402-brand"><span class="mark">x4</span>hiero-x402 <small>verifiable settlement</small></div>
+${banner}${content}
+<div class="x402-bodies">${bodies}</div>
+<footer class="x402-foot"><span>hiero-x402 · x402 on Hiero with verifiable settlement</span><span>independent · facilitator-free verification</span></footer>
+${RCPT_OVERRIDE}
+</div>`;
+}
+
+// The document's two static stylesheets, hoisted to module scope — they
+// interpolate nothing, so rebuilding them per receipt only buried the
+// assembly logic under ~110 lines of CSS.
+const THEME = `<style>
   :root{
     --ink:#0b0a10;--panel:#151220;--panel-2:#100e19;--line:#272235;--line-2:#332c46;
     --text:#eceaf4;--muted:#9d97ae;--faint:#6c657d;
@@ -258,6 +286,8 @@ export function settlementReceiptHTML(
   .x402-proof a{color:var(--proof);text-decoration:none;font-weight:600}
   .x402-proof a:hover{text-decoration:underline}
   .x402-method{margin:0;color:var(--faint);font-size:.8rem}
+  .x402-caveat{margin:.75rem 0 0;padding:.55rem .8rem;border:1px solid rgba(243,182,77,.35);
+    border-radius:10px;background:rgba(243,182,77,.07);color:var(--warn);font-size:.8rem}
   .x402-bodies{display:flex;flex-direction:column;gap:1rem}
   .x402-brand{display:flex;align-items:center;gap:.65rem;font-weight:650;letter-spacing:-.01em;color:var(--text)}
   .x402-brand .mark{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;font-family:var(--mono);
@@ -274,9 +304,9 @@ export function settlementReceiptHTML(
     .x402-title{color:#111}.x402-verdict{color:#111}.x402-brand,.x402-brand small{color:#333}
   }
 </style>`;
-  // The dark re-theme of the embedded hiero-receipts card — MUST come last so
-  // it overrides the library's own light <style> by source order.
-  const rcptOverride = `<style>
+// The dark re-theme of the embedded hiero-receipts card — MUST come last so
+// it overrides the library's own light <style> by source order.
+const RCPT_OVERRIDE = `<style>
   .rcpt{max-width:none;width:100%;box-sizing:border-box;background:linear-gradient(180deg,var(--panel),var(--panel-2));
     border:1px solid var(--line);border-radius:18px;color:var(--text);padding:1.4rem 1.6rem;font-family:var(--sans)}
   .rcpt .who{color:var(--faint);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin:0 0 .5rem}

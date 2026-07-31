@@ -134,6 +134,17 @@ describe("the demo hub (/ui)", () => {
     expect(html).toContain("Block proof");
   });
 
+  it("withholds receipts from earlier sessions — none until THIS boot writes one", async () => {
+    // A freshly-booted app can have no receipt of its own yet, so this must
+    // 404 even on a dev machine where a stale receipt.html sits on disk.
+    const response = await app.request("http://localhost/receipts/receipt");
+    expect(response.status).toBe(404);
+    expect(await response.text()).toContain("No receipt from this session yet");
+    // And the hub's card must offer no link to it, only the honest empty slot.
+    const hub = await app.request("http://localhost/ui");
+    expect(await hub.text()).toContain("none from this session yet");
+  });
+
   it("receipt routes 404 honestly for unknown names", async () => {
     expect((await app.request("/receipts/evil")).status).toBe(404);
   });
@@ -144,6 +155,13 @@ describe("the demo hub (/ui)", () => {
     expect(html).toContain("agent · client key");
     expect(html).toContain("Live runs are off here");
     expect(html).not.toContain('<button id="run-agent"'); // no button without a runner
+  });
+
+  it("/demo/audit answers 501 honestly when no attestation topic is configured", async () => {
+    const response = await app.request("http://localhost/demo/audit");
+    expect(response.status).toBe(501);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("ATTEST_TOPIC_ID");
   });
 
   it("/demo/run answers 501 honestly when no agent runner is attached", async () => {

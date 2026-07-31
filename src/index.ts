@@ -24,7 +24,7 @@ export { verifySettlement } from "./verify.js";
 export type { SettlementVerdict, VerifyOptions } from "./verify.js";
 export { verifySettlementFromBlock } from "./stream.js";
 export type { BlockSource, StreamVerifyOptions } from "./stream.js";
-export { settlementReceiptHTML, verdictLine } from "./receipt.js";
+export { escapeHTML, settlementReceiptHTML, verdictLine } from "./receipt.js";
 export type { ReceiptOptions } from "./receipt.js";
 export {
   CONTENT_COMMITMENT_VERSION,

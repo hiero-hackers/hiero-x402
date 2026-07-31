@@ -122,6 +122,15 @@ describe("settlementReceiptHTML", () => {
     expect(html).not.toContain("Delivered content");
   });
 
+  it("renders a caveat only when the caller owns up to one, escaped", async () => {
+    const verdict = await verdictFor(5_000_000);
+    expect(settlementReceiptHTML(verdict)).not.toContain('<p class="x402-caveat">');
+    const html = settlementReceiptHTML(verdict, { caveat: "Beta <fixture> demonstration" });
+    expect(html).toContain('<p class="x402-caveat">');
+    expect(html).toContain("Beta &#60;fixture&#62; demonstration");
+    expect(html).not.toContain("Beta <fixture>");
+  });
+
   it("keeps the content panel OUTSIDE the settlement seal's authority, in its own register", async () => {
     const verdict = await verdictFor(5_000_000);
     const sha = "a".repeat(64);
