@@ -33,6 +33,7 @@ import {
   contentCommitmentMessage,
   parseContentCommitmentHeaders,
   settlementReceiptHTML,
+  settlementReceiptJSON,
   sha256Hex,
   verdictLine,
   verifySettlement,
@@ -348,11 +349,19 @@ if (humanConsent !== undefined) {
 
 // The path is the operator's own env choice, not request-derived input.
 
-writeFileSync(
-  RECEIPT_PATH,
-  settlementReceiptHTML(verdict, { content, ...(consent !== undefined ? { consent } : {}) }),
-);
+const receiptOptions = { content, ...(consent !== undefined ? { consent } : {}) };
+writeFileSync(RECEIPT_PATH, settlementReceiptHTML(verdict, receiptOptions));
 console.log(`[agent] 7 · receipt written to ${RECEIPT_PATH}`);
+
+// The machine twin — same verdict, same registers (schema v1,
+// docs/receipt-schema.md), for agents that index receipts rather than
+// read them. Every amount is an atomic-unit string; nothing re-derived.
+const JSON_RECEIPT_PATH = `${RECEIPT_PATH.replace(/\.html$/, "")}.json`;
+writeFileSync(
+  JSON_RECEIPT_PATH,
+  `${JSON.stringify(settlementReceiptJSON(verdict, receiptOptions), null, 2)}\n`,
+);
+console.log(`[agent] 7½ · machine receipt written to ${JSON_RECEIPT_PATH}`);
 
 // 8 · Optional HCS attestation — the verdict onto an append-only public log.
 // Failure here warns and moves on: the verdict stands on the mirror check.

@@ -3,5 +3,7 @@ dist/
 .env
 coverage/
 receipt.html
+receipt.json
 verified-receipt.html
+verified-receipt.json
 research/

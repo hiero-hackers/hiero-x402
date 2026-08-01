@@ -25,6 +25,7 @@ import {
   HBAR_ASSET,
   SCHEME,
   settlementReceiptHTML,
+  settlementReceiptJSON,
   verdictLine,
   verifySettlementFromBlock,
 } from "../src/index.js";
@@ -66,28 +67,31 @@ export function runProvenance(): ProvenanceResult {
   lines.push(
     `[provenance] receipt provenance: ${provenance?.kind ?? "none"} — proof checked before a single field was believed`,
   );
+  const receiptOptions = {
+    // The artifact explains itself — a reader must not need the README to
+    // decode the old date or the unfamiliar network.
+    caveat:
+      "Beta demonstration: this proof is verified from a committed PREVIEWNET block " +
+      "fixture (block 467 — its real consensus date), because HIP-1056 block streams " +
+      "have not reached testnet yet. The pipeline is live; the source is the fixture.",
+    // The proof's working — WHAT held before a single field was believed.
+    proof: {
+      source: "block 467 · hedera:previewnet (committed fixture, real block)",
+      anchor: "genesis block 0 — the chain of block hashes ends here",
+      checks: [
+        "the block's merkle root, recomputed from its own items — not read from a header",
+        "the in-band block proof's threshold signature, verified against the ledger id",
+        "the settlement transaction located INSIDE the proven block, judged against the terms",
+      ],
+    },
+  };
+  writeFileSync("verified-receipt.html", settlementReceiptHTML(verdict, receiptOptions));
+  // The machine twin — the VERIFIED stamp and the proof's working, indexable.
   writeFileSync(
-    "verified-receipt.html",
-    settlementReceiptHTML(verdict, {
-      // The artifact explains itself — a reader must not need the README to
-      // decode the old date or the unfamiliar network.
-      caveat:
-        "Beta demonstration: this proof is verified from a committed PREVIEWNET block " +
-        "fixture (block 467 — its real consensus date), because HIP-1056 block streams " +
-        "have not reached testnet yet. The pipeline is live; the source is the fixture.",
-      // The proof's working — WHAT held before a single field was believed.
-      proof: {
-        source: "block 467 · hedera:previewnet (committed fixture, real block)",
-        anchor: "genesis block 0 — the chain of block hashes ends here",
-        checks: [
-          "the block's merkle root, recomputed from its own items — not read from a header",
-          "the in-band block proof's threshold signature, verified against the ledger id",
-          "the settlement transaction located INSIDE the proven block, judged against the terms",
-        ],
-      },
-    }),
+    "verified-receipt.json",
+    `${JSON.stringify(settlementReceiptJSON(verdict, receiptOptions), null, 2)}\n`,
   );
-  lines.push("[provenance] receipt written to verified-receipt.html");
+  lines.push("[provenance] receipts written to verified-receipt.html + .json");
   lines.push("[provenance] when HIP-1056 block streams reach testnet, the x402 e2e verdict");
   lines.push("[provenance] gains this provenance by swapping the source — nothing else changes.");
   return { lines, status: verdict.fulfilment.status };

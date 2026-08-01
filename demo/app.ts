@@ -436,6 +436,28 @@ export function createApp(options: AppOptions): Hono {
   // honest, and a stale artifact from last week must never pass as today's.
   app.get("/receipts/:name", (c) => {
     const name = c.req.param("name");
+    // The machine twins ride the same freshness rule as the pages they
+    // mirror — a JSON artifact from last week must not pass as today's.
+    // The 404 explains itself: a machine reader gets the why and the fix,
+    // same courtesy the HTML 404 page extends to humans.
+    if (name === "receipt.json" || name === "verified-receipt.json") {
+      if (!freshReceipt(name)) {
+        return c.json(
+          {
+            error: "no receipt from this session yet",
+            why:
+              "receipts are session artifacts — one left on disk by an earlier " +
+              "session is deliberately withheld until a run under THIS server writes it",
+            hint:
+              name === "receipt.json"
+                ? "run the agent (npm run e2e) — receipt.json is written beside receipt.html after a real settlement"
+                : "click “Run the block-proof rung” in the hub, or `npm run provenance` in a terminal — offline, no keys, works immediately",
+          },
+          404,
+        );
+      }
+      return c.body(readFileSync(name, "utf8"), 200, { "content-type": "application/json" });
+    }
     if (name !== "receipt" && name !== "verified-receipt") return c.notFound();
     const file = `${name}.html`;
     if (!freshReceipt(file)) {
