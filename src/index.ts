@@ -26,6 +26,8 @@ export { verifySettlementFromBlock } from "./stream.js";
 export type { BlockSource, StreamVerifyOptions } from "./stream.js";
 export { escapeHTML, settlementReceiptHTML, verdictLine } from "./receipt.js";
 export type { ReceiptOptions } from "./receipt.js";
+export { settlementReceiptJSON, RECEIPT_SCHEMA_VERSION } from "./receipt-json.js";
+export type { SettlementReceiptJSON, TrustStamp } from "./receipt-json.js";
 export {
   CONTENT_COMMITMENT_VERSION,
   CONTENT_SHA256_HEADER,
