@@ -27,6 +27,21 @@ export type { BlockSource, StreamVerifyOptions } from "./stream.js";
 export { escapeHTML, settlementReceiptHTML, verdictLine } from "./receipt.js";
 export type { ReceiptOptions } from "./receipt.js";
 export {
+  consentRegister,
+  contentRegister,
+  settledFacts,
+  settlementRegister,
+} from "./verdict-view.js";
+export type {
+  ConsentBadge,
+  ConsentRegister,
+  ContentBadge,
+  ContentRegister,
+  SettledFacts,
+  SettlementRegister,
+  SettlementStamp,
+} from "./verdict-view.js";
+export {
   CONTENT_COMMITMENT_VERSION,
   CONTENT_SHA256_HEADER,
   CONTENT_SIGNATURE_HEADER,
