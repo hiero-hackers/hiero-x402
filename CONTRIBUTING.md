@@ -12,6 +12,20 @@ npm run verify        # THE gate suite: typecheck, lint, format, tests + coverag
 npm run provenance    # the block-proof demo — offline, runs anywhere
 ```
 
+**`npm install` 401s on the `@hiero-hackers` scope?** The packages are
+public, but GitHub Packages requires _a_ token even for public packages —
+any GitHub account's personal access token with the `read:packages` scope
+works; nothing needs granting from us:
+
+```sh
+npm config set //npm.pkg.github.com/:_authToken "<your PAT with read:packages>"
+```
+
+Can't mint a token where you're working? Open your PR as a **draft early**
+— CI runs the full verify gate on every push, so treat it as your test
+runner. Either way, please don't guess at field shapes the compiler would
+have caught: the `src/` types are browsable without installing.
+
 The live demo (`npm run facilitator` / `server` / `e2e`) needs testnet
 accounts — see [.env.example](.env.example) and the README. The rails are
 deliberately separate processes — the facilitator holds the fee-payer key,

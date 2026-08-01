@@ -29,6 +29,21 @@ export type { ReceiptOptions } from "./receipt.js";
 export { settlementReceiptJSON, RECEIPT_SCHEMA_VERSION } from "./receipt-json.js";
 export type { SettlementReceiptJSON, TrustStamp } from "./receipt-json.js";
 export {
+  consentRegister,
+  contentRegister,
+  settledFacts,
+  settlementRegister,
+} from "./verdict-view.js";
+export type {
+  ConsentBadge,
+  ConsentRegister,
+  ContentBadge,
+  ContentRegister,
+  SettledFacts,
+  SettlementRegister,
+  SettlementStamp,
+} from "./verdict-view.js";
+export {
   CONTENT_COMMITMENT_VERSION,
   CONTENT_SHA256_HEADER,
   CONTENT_SIGNATURE_HEADER,
