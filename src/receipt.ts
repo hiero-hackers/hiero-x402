@@ -8,6 +8,7 @@
  */
 import { toHTML } from "@hiero-hackers/hiero-receipts";
 import type { DeliveredContent } from "./content.js";
+import { consentRegister, contentRegister, settlementRegister } from "./verdict-view.js";
 import type { SettlementVerdict } from "./verify.js";
 
 /** HTML-escape untrusted text — ONE implementation for every server-side
@@ -123,24 +124,15 @@ function settledLine(verdict: SettlementVerdict): string {
  */
 function contentPanel(content: DeliveredContent): string {
   const { commitment } = content;
-  const register =
-    commitment === undefined
-      ? {
-          badge: "AGENT RECORD",
-          badgeClass: "mute",
-          line: "The agent&#39;s own record of the bytes it received. This server does not offer content commitments — the payment above is proven either way; the content simply carries no server signature.",
-        }
-      : commitment.verified
-        ? {
-            badge: "SERVER COMMITTED",
-            badgeClass: "commit",
-            line: "The server signed these exact bytes against this settlement — it cannot later deny serving them. Anyone holding the content can re-hash it and check.",
-          }
-        : {
-            badge: "COMMITMENT BROKEN",
-            badgeClass: "bad",
-            line: "A commitment was presented but its signature does NOT verify over the received bytes. Treat the content as unattested — and keep this artifact: a false commitment is itself evidence.",
-          };
+  // The register — badge and wording — is verdict-view's to decide; this
+  // renderer only owns the presentation (CSS class, markup, escaping).
+  const register = contentRegister(content);
+  const badgeClass =
+    register.badge === "SERVER COMMITTED"
+      ? "commit"
+      : register.badge === "AGENT RECORD"
+        ? "mute"
+        : "bad";
   const signerRows =
     commitment === undefined
       ? ""
@@ -150,9 +142,9 @@ function contentPanel(content: DeliveredContent): string {
   return `<section class="x402-card x402-content">
   <p class="x402-eyebrow">Delivered content</p>
   <div class="x402-top">
-    <span class="x402-badge ${register.badgeClass}">${register.badge}</span>
+    <span class="x402-badge ${badgeClass}">${register.badge}</span>
   </div>
-  <p class="x402-content-line">${register.line}</p>
+  <p class="x402-content-line">${escapeHTML(register.line)}</p>
   <dl class="x402-meta">
     <div><dt>Content sha-256</dt><dd><code>${escapeHTML(content.sha256)}</code></dd></div>${signerRows}
   </dl>
@@ -167,23 +159,14 @@ function contentPanel(content: DeliveredContent): string {
  * never quietly displayed as fact.
  */
 function consentPanel(consent: NonNullable<ReceiptOptions["consent"]>): string {
-  const register = consent.verified
-    ? {
-        badge: "HUMAN APPROVED",
-        badgeClass: "human",
-        line: "A human&#39;s wallet signed this exact challenge — nonce and issue time bind the approval to THIS run, so a captured signature approves nothing later.",
-      }
-    : {
-        badge: "CONSENT UNVERIFIED",
-        badgeClass: "bad",
-        line: "A consent was presented but its signature does not verify against the approver&#39;s on-chain key — treat the approval as unattested.",
-      };
+  const register = consentRegister(consent);
+  const badgeClass = register.badge === "HUMAN APPROVED" ? "human" : "bad";
   return `<section class="x402-card x402-content">
   <p class="x402-eyebrow">Human approval</p>
   <div class="x402-top">
-    <span class="x402-badge ${register.badgeClass}">${register.badge}</span>
+    <span class="x402-badge ${badgeClass}">${register.badge}</span>
   </div>
-  <p class="x402-content-line">${register.line}</p>
+  <p class="x402-content-line">${escapeHTML(register.line)}</p>
   <dl class="x402-meta">
     <div><dt>Approver</dt><dd><code>${escapeHTML(consent.approver)}</code></dd></div>
     <div><dt>Signed challenge</dt><dd><code>${escapeHTML(consent.terms)}</code></dd></div>
@@ -229,17 +212,11 @@ export function settlementReceiptHTML(
   verdict: SettlementVerdict,
   options: ReceiptOptions = {},
 ): string {
-  // Say HOW it was verified — the receipts carry their provenance, and the
-  // banner must not claim the mirror for a block-proof verdict (or vice versa).
-  const proven = verdict.receipts.some((receipt) => receipt.provenance.kind === "verified");
-  // Wording discipline (review request): "verified" is reserved for the
-  // block-proof rung — cryptography. The mirror path is an independent
-  // *record*: the operator's attested data, re-checkable by anyone but not
-  // proven. So it is a "mirror receipt", never "verified" — the banner must
-  // not contradict the body, which already stamps the mirror receipt UNVERIFIED.
-  const method = proven
-    ? "Verified against the ledger&#39;s own block proof — cryptography, not the facilitator&#39;s word."
-    : "Read from the public mirror node — the operator&#39;s attested record, not the facilitator&#39;s word.";
+  // HOW it was verified — and the wording discipline that goes with it
+  // ("verified" is reserved for the block-proof rung) — is verdict-view's
+  // single decision; the banner must not contradict the body, which already
+  // stamps the mirror receipt UNVERIFIED.
+  const { proven, method } = settlementRegister(verdict);
   const eyebrow = proven ? "Certificate of settlement · block proof" : "Mirror receipt";
   const title = proven
     ? "x402 settlement — independently verified"
@@ -283,7 +260,7 @@ export function settlementReceiptHTML(
       ? `<p class="x402-proof x402-mirror"><a href="${escapeHTML(verdict.mirrorUrl)}">View the raw mirror-node record <span aria-hidden="true">↗</span></a> — the JSON this verdict was read from.</p>`
       : ""
   }
-  <p class="x402-method">${method}</p>
+  <p class="x402-method">${escapeHTML(method)}</p>
   ${options.caveat !== undefined ? `<p class="x402-caveat">${escapeHTML(options.caveat)}</p>` : ""}
 </header>`;
   const bodies = verdict.receipts.map((receipt) => toHTML(receipt)).join("\n");
