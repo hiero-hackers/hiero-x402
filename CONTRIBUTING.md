@@ -57,6 +57,12 @@ the resource server holds no payment keys, the agent holds its own;
   settlement header, the signature core (`verifySignatureWithKey`).
   Extend the owner; never fork a copy — every one of these once existed
   as two drifting copies.
+- **Parsers get fuzzed, not just exampled.** Anything reading input this
+  repo did not write — topic messages, response headers, network ids, text
+  bound for a receipt — carries property-based tests in
+  [test/fuzz.test.ts](test/fuzz.test.ts) (`npm run test:fuzz`). Add a
+  parser, add its properties: never throws on hostile input, never
+  half-understands a shape, never widens the gate.
 - **Machine facts ride typed channels.** The hub's behavior comes from
   SSE events parsed once server-side; narration lines are display only.
   Never regex prose for an outcome.

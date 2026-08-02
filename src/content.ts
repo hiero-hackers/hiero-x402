@@ -62,8 +62,12 @@ export const isSha256Hex = (text: string): boolean => /^[0-9a-f]{64}$/.test(text
  * the convention is a one-site edit that moves both parties together.
  */
 export function commitmentReference(url: string | URL): string {
+  // A raw request target is NOT normalized (`/./a`, `/x/../y`, spaces) while
+  // the URL the agent fetched is — resolving the path form against a
+  // placeholder origin makes both parties walk the exact same parser, so
+  // they cannot sign and verify different bytes for the same route.
   return typeof url === "string" && url.startsWith("/")
-    ? url.split("?")[0]!
+    ? new URL(`http://x${url}`).pathname
     : new URL(url).pathname;
 }
 

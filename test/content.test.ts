@@ -42,6 +42,17 @@ describe("commitmentReference", () => {
     expect(commitmentReference("/data/spot-price?symbol=HBAR")).toBe("/data/spot-price");
     expect(commitmentReference("/data/ohlc")).toBe("/data/ohlc");
   });
+
+  it("normalizes a raw request target the way the fetched URL already is", () => {
+    // Found by the property suite: a server signing `req.url` verbatim and an
+    // agent hashing the URL it fetched would sign different bytes for the
+    // same route. Both forms now walk the same URL parser.
+    expect(commitmentReference("/data/./spot-price")).toBe("/data/spot-price");
+    expect(commitmentReference("/data/x/../spot-price")).toBe("/data/spot-price");
+    expect(commitmentReference("/data/spot price")).toBe(
+      commitmentReference("http://localhost:4021/data/spot price"),
+    );
+  });
 });
 
 describe("isSha256Hex", () => {
