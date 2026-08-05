@@ -274,6 +274,7 @@ export function hubHTML(view: HubView): string {
           "The ledger's own (beta) block proof — recomputed and checked independently. Cryptography, not attestation: the only receipt we call verified.",
         )}
       </div>
+      <p class="note">Machine twins for agents that index rather than read: <a href="/receipts/receipt.json" target="_blank"><code>receipt.json</code></a> · <a href="/receipts/verified-receipt.json" target="_blank"><code>verified-receipt.json</code></a> — same verdict, same stamps, schema v1 (docs/receipt-schema.md).</p>
       <button id="run-provenance" class="btn ghost" style="margin-top:1rem">🧾 Run the block-proof rung — real previewnet block, verified offline</button>
       <div id="receipt-viewer" class="viewer">
         <div class="viewer-bar">
