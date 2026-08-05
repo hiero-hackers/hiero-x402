@@ -22,13 +22,31 @@
 import { Buffer } from "node:buffer";
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { formatBaseUnits } from "@hiero-hackers/hiero-payment-requests";
+import { HEDERA_TESTNET_USDC } from "@x402/hedera";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import { createClientHederaSigner } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
-import { settlementReceiptHTML, verdictLine, verifySettlement } from "../src/index.js";
+import {
+  HBAR_ASSET,
+  commitmentReference,
+  contentCommitmentMessage,
+  parseContentCommitmentHeaders,
+  settlementReceiptHTML,
+  sha256Hex,
+  verdictLine,
+  verifySettlement,
+} from "../src/index.js";
+import type { DeliveredContent } from "../src/index.js";
 import { attest } from "./attest.js";
 import { hushBenignSdkWarnings } from "./quiet.js";
-import { demoNetwork, requireEnv, resolvePrivateKey } from "./shared.js";
+import {
+  demoNetwork,
+  requireEnv,
+  resolvePrivateKey,
+  verifyAccountSignature,
+  verifyWalletSignature,
+} from "./shared.js";
 
 hushBenignSdkWarnings(); // drop the SDK's expected raw-HEX-key advisory (see quiet.ts)
 
@@ -47,6 +65,41 @@ const httpClient = new x402HTTPClient(
   new x402Client().register("hedera:*", new ExactHederaScheme(signer)),
 );
 
+/** "0.05000000 ℏ (5,000,000 tinybar)" — amounts a human can read at a
+ *  glance. The wire stays atomic; only the narration converts, and the
+ *  decimal split comes from the library, not hand-rolled bigint math. */
+function fmtAmount(amount: bigint, asset: string): string {
+  if (asset === HBAR_ASSET) {
+    return `${formatBaseUnits(amount, 8)} ℏ (${amount.toLocaleString("en-US")} tinybar)`;
+  }
+  if (asset === HEDERA_TESTNET_USDC) {
+    // The one token this demo knows the decimals of — the official testnet USDC.
+    return `${formatBaseUnits(amount, 6)} USDC (${amount.toLocaleString("en-US")} base units)`;
+  }
+  return `${amount.toLocaleString("en-US")} base units of token ${asset}`;
+}
+
+/**
+ * Plain words for the wire's failure codes — a demo that dumps raw JSON at
+ * the exact moment something goes wrong has stopped explaining itself.
+ */
+function explainPaymentFailure(code: unknown, asset: string): string | undefined {
+  if (typeof code !== "string") return undefined;
+  if (code.includes("preflight")) {
+    return asset === HBAR_ASSET
+      ? "the facilitator's preflight refused this payment before submitting anything on-chain — " +
+          "check the agent's HBAR balance and that the payTo account can receive"
+      : `the facilitator's preflight refused this TOKEN payment before anything went on-chain: ` +
+          `to settle in this token the AGENT must hold a balance of ${asset} ` +
+          `AND the payTo account must be associated with it. Fund the agent from a testnet ` +
+          `USDC faucet, associate payTo, or pick an HBAR route.`;
+  }
+  if (code.includes("insufficient")) {
+    return "the payer's balance cannot cover the quote — top the agent up from the faucet";
+  }
+  return undefined;
+}
+
 const url = `${SERVER_URL}${RESOURCE}?symbol=${encodeURIComponent(SYMBOL)}`;
 
 console.log(`[agent] 1 · GET ${url}`);
@@ -57,10 +110,7 @@ if (challenge.status !== 402) {
 }
 const paymentRequired = httpClient.getPaymentRequiredResponse(
   (name) => challenge.headers.get(name),
-  await challenge
-    .clone()
-    .json()
-    .catch(() => undefined),
+  await challenge.json().catch(() => undefined),
 );
 const accepted = paymentRequired.accepts[0];
 if (accepted === undefined) {
@@ -68,13 +118,47 @@ if (accepted === undefined) {
   process.exit(1);
 }
 console.log(
-  `[agent] 2 · 402: ${accepted.amount} tinybar of ${accepted.asset} → ${accepted.payTo} ` +
-    `(feePayer ${String(accepted.extra?.feePayer)} sponsors the network fee)`,
+  `[agent] 2 · 402: price ${fmtAmount(BigInt(accepted.amount), accepted.asset)} → ${accepted.payTo} ` +
+    `(feePayer ${String(accepted.extra?.feePayer)} sponsors the network fee — ` +
+    `the agent pays the price, never the fee)`,
 );
+
+// The agent's own spend policy — a cap in the atomic units of ONE asset
+// (MAX_AGENT_PAYMENT_ASSET, default HBAR; the hub sets both from its
+// dropdown). Checked BEFORE the approval gate: a quote over the cap is
+// not worth a human's time, let alone a signature. A quote in a DIFFERENT
+// asset than the cap's denomination is never compared — units first.
+// Exit 4 is the policy-refusal code (0 paid · 2 unverified · 3 declined ·
+// 4 over cap).
+const MAX_PAYMENT = process.env.MAX_AGENT_PAYMENT ?? "";
+const MAX_PAYMENT_ASSET = process.env.MAX_AGENT_PAYMENT_ASSET ?? HBAR_ASSET;
+if (MAX_PAYMENT !== "" && /^\d+$/.test(MAX_PAYMENT)) {
+  if (accepted.asset !== MAX_PAYMENT_ASSET) {
+    console.log(
+      `[agent]     spend policy: cap is denominated in ` +
+        `${MAX_PAYMENT_ASSET === HBAR_ASSET ? "HBAR" : `token ${MAX_PAYMENT_ASSET}`} — ` +
+        `this quote is in a different asset, so the cap is not applied`,
+    );
+  } else if (BigInt(accepted.amount) > BigInt(MAX_PAYMENT)) {
+    console.log(
+      `[agent] 2 · REFUSED by spend policy — the quote exceeds the cap of ` +
+        `${fmtAmount(BigInt(MAX_PAYMENT), MAX_PAYMENT_ASSET)}; nothing signed, nothing spent`,
+    );
+    process.exit(4);
+  } else {
+    console.log(
+      `[agent]     spend policy ✓ quote is within the cap of ${fmtAmount(BigInt(MAX_PAYMENT), MAX_PAYMENT_ASSET)}`,
+    );
+  }
+} else if (MAX_PAYMENT !== "") {
+  console.warn(
+    "[agent] MAX_AGENT_PAYMENT must be a whole number of atomic units (5 ℏ = 500000000) — cap ignored",
+  );
+}
 
 if (process.env.HUMAN_APPROVAL === "1") {
   console.log(
-    `[agent] 2½ · AWAITING HUMAN APPROVAL — pay ${accepted.amount} tinybar of ${accepted.asset} ` +
+    `[agent] 2½ · AWAITING HUMAN APPROVAL — pay ${fmtAmount(BigInt(accepted.amount), accepted.asset)} ` +
       `to ${accepted.payTo} for ${RESOURCE}? (y/N)`,
   );
   const gate = await new Promise<{ approved: boolean; consent?: string }>((resolve) => {
@@ -135,14 +219,25 @@ const payload = await httpClient.createPaymentPayload(paymentRequired);
 
 console.log("[agent] 4 · retrying with payment attached");
 const paid = await fetch(url, { headers: httpClient.encodePaymentSignatureHeader(payload) });
+// Hash the EXACT bytes received, before any parsing — the content
+// commitment (if the server sent one) is over these bytes, nothing else.
+const receivedBytes = Buffer.from(await paid.clone().arrayBuffer());
 const result = await httpClient.processResponse(paid);
 const settle =
   result.header !== undefined && "transaction" in result.header ? result.header : undefined;
 if (result.paymentStatus !== "settled" || settle === undefined) {
+  // Diagnose in plain words FIRST; the raw wire follows for anyone digging.
+  const errorCode = (result.header as { error?: unknown } | undefined)?.error;
+  const why = explainPaymentFailure(errorCode, accepted.asset);
   console.error(
-    `[agent] payment did not go through (status ${result.status}, ${result.paymentStatus})\n` +
-      `[agent]   body:   ${JSON.stringify(result.body)}\n` +
-      `[agent]   header: ${JSON.stringify(result.header)}`,
+    `[agent] ✗ payment did not go through — ${typeof errorCode === "string" ? errorCode : result.paymentStatus}`,
+  );
+  if (why !== undefined) console.error(`[agent]   why: ${why}`);
+  console.error(
+    `[agent]   nothing settled on-chain; nothing was lost beyond the request itself\n` +
+      `[agent]   raw detail (status ${result.status}):\n` +
+      `[agent]     body:   ${JSON.stringify(result.body)}\n` +
+      `[agent]     header: ${JSON.stringify(result.header)}`,
   );
   process.exit(1);
 }
@@ -160,12 +255,103 @@ const verdict = await verifySettlement(
   },
 );
 console.log(`[agent]     ${verdictLine(verdict)}`);
+// Say the money out loud: what the terms quoted, what the chain settled,
+// and who paid the network fee — the numbers, not just the word "paid".
+if ("received" in verdict.fulfilment) {
+  const quoted = verdict.request.amount;
+  const settled = verdict.fulfilment.received;
+  const delta =
+    settled === quoted
+      ? "exact"
+      : settled > quoted
+        ? `${(settled - quoted).toLocaleString("en-US")} over`
+        : `${(quoted - settled).toLocaleString("en-US")} short`;
+  console.log(
+    `[agent]     charged: quoted ${fmtAmount(quoted, accepted.asset)} → settled ` +
+      `${fmtAmount(settled, accepted.asset)} — ${delta}; network fee paid by the sponsor, not the agent`,
+  );
+}
 if (verdict.hashscanUrl !== undefined) console.log(`[agent]     hashscan: ${verdict.hashscanUrl}`);
 if (verdict.mirrorUrl !== undefined) console.log(`[agent]     mirror record: ${verdict.mirrorUrl}`);
 
+// 6½ · The CONTENT side of the trade. The settlement verdict above proves
+// the money moved; this checks whether the server COMMITTED to what it
+// served in return (x-content-* headers, signed against this settlement).
+// The signature is verified over the bytes WE received, against the
+// signer's on-chain key from the mirror — never against the header's own
+// claims. No commitment is honest and allowed; a broken one is loud.
+const contentSha = sha256Hex(receivedBytes);
+const presented = parseContentCommitmentHeaders((name) => paid.headers.get(name));
+// The signed reference — derived by the SAME convention function the
+// server middleware uses (src/content.ts commitmentReference), so the two
+// parties can never disagree about which form was signed.
+const signedReference = commitmentReference(url);
+let content: DeliveredContent = { sha256: contentSha, reference: signedReference };
+if (presented !== undefined) {
+  const committed =
+    presented.sha256 === contentSha &&
+    (await verifyAccountSignature(
+      presented.signer,
+      contentCommitmentMessage({
+        // The canonical REST-normalized id — the same form the server
+        // signed, the verdict carries, and the topic attestation records.
+        transactionId: verdict.transactionId,
+        reference: signedReference,
+        sha256: contentSha,
+      }),
+      presented.signatureB64,
+    ));
+  content = {
+    sha256: contentSha,
+    reference: signedReference,
+    commitment: {
+      signer: presented.signer,
+      signatureB64: presented.signatureB64,
+      verified: committed,
+    },
+  };
+  console.log(
+    committed
+      ? `[agent] 6½ · content COMMITTED — ${presented.signer} signed sha-256 ${contentSha.slice(0, 16)}… against this settlement (key mirror-checked)`
+      : `[agent] 6½ · content commitment BROKEN — presented by ${presented.signer} but it does not verify; treating the data as unattested`,
+  );
+} else {
+  console.log(
+    `[agent] 6½ · no content commitment offered — recording sha-256 ${contentSha.slice(0, 16)}… as the agent's own note`,
+  );
+}
+
+// The human approval, re-verified for the receipt: the hub checked the
+// wallet signature before relaying, but this agent grades its own homework
+// against the approver's ON-CHAIN key — the receipt's consent panel shows
+// the agent's verdict, not the hub's word.
+let consent:
+  { approver: string; terms: string; signatureB64: string; verified: boolean } | undefined;
+if (humanConsent !== undefined) {
+  const consentVerified = await verifyWalletSignature(
+    humanConsent.accountId,
+    humanConsent.terms,
+    humanConsent.signature,
+  );
+  consent = {
+    approver: humanConsent.accountId,
+    terms: humanConsent.terms,
+    signatureB64: humanConsent.signature,
+    verified: consentVerified,
+  };
+  console.log(
+    consentVerified
+      ? `[agent]     consent ✓ re-verified against ${humanConsent.accountId}'s on-chain key — on the receipt`
+      : `[agent]     consent signature did NOT re-verify — the receipt says so`,
+  );
+}
+
 // The path is the operator's own env choice, not request-derived input.
 
-writeFileSync(RECEIPT_PATH, settlementReceiptHTML(verdict));
+writeFileSync(
+  RECEIPT_PATH,
+  settlementReceiptHTML(verdict, { content, ...(consent !== undefined ? { consent } : {}) }),
+);
 console.log(`[agent] 7 · receipt written to ${RECEIPT_PATH}`);
 
 // 8 · Optional HCS attestation — the verdict onto an append-only public log.
@@ -178,6 +364,7 @@ if (ATTEST_TOPIC_ID !== "") {
       ATTEST_TOPIC_ID,
       { accountId: ACCOUNT_ID, key: AGENT_KEY },
       humanConsent,
+      content, // the (transaction → content hash) binding, public and timestamped
     );
     console.log(`[agent] 8 · verdict attested to HCS topic ${result.topicId}`);
     console.log(`[agent]     audit log: ${result.hashscanTopicUrl}`);

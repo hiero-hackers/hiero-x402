@@ -7,9 +7,14 @@
  * those are x402 facts, not receipt facts.
  */
 import { toHTML } from "@hiero-hackers/hiero-receipts";
+import type { DeliveredContent } from "./content.js";
+import { consentRegister, contentRegister, settlementRegister } from "./verdict-view.js";
 import type { SettlementVerdict } from "./verify.js";
 
-const escapeHTML = (text: string): string =>
+/** HTML-escape untrusted text — ONE implementation for every server-side
+ *  artifact this repo renders (receipts here, the demo hub imports it):
+ *  an XSS-relevant helper must not exist in drifting copies. */
+export const escapeHTML = (text: string): string =>
   text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 /** One line of plain language per verdict status. */
@@ -33,23 +38,185 @@ export function verdictLine(verdict: SettlementVerdict): string {
   }
 }
 
+export interface ReceiptOptions {
+  /**
+   * What the server delivered for the payment — the agent's hash of the
+   * bytes it received, plus the server's commitment when one was presented.
+   * Rendered in its OWN panel with its OWN trust register, deliberately
+   * outside the settlement seal's authority: the seal speaks for the money,
+   * never for the content.
+   */
+  readonly content?: DeliveredContent;
+  /**
+   * A plain-words caveat rendered on the banner — for artifacts that need
+   * to explain themselves (a beta pipeline, a fixture-sourced proof, an
+   * old consensus date) without a README in hand. The receipt never
+   * invents one; the caller owns the honesty.
+   */
+  readonly caveat?: string;
+  /**
+   * The wallet-signed human approval for THIS payment, when one happened.
+   * `terms` is the one-time challenge the wallet signed (nonce + issue
+   * time bind it to this run); `verified` is the caller's re-verification
+   * against the approver's ON-CHAIN key — same discipline as content
+   * commitments: rendered in its own register, never under the settlement
+   * seal's authority. Absent → an autonomous run; no panel, no judgment.
+   */
+  readonly consent?: {
+    readonly approver: string;
+    readonly terms: string;
+    readonly signatureB64: string;
+    readonly verified: boolean;
+  };
+  /**
+   * The proof facts for a block-proof verdict — WHAT was checked, not just
+   * that checking happened: the source block, the anchor it chains to, and
+   * the checks that had to hold before a single field was believed. The
+   * caller owns the facts (it ran the proof); the receipt renders them in
+   * the gold register the seal already claims.
+   */
+  readonly proof?: {
+    /** e.g. "block 467 · hedera:previewnet (committed fixture)" */
+    readonly source: string;
+    /** e.g. "genesis block 0 — the chain of block hashes ends here" */
+    readonly anchor?: string;
+    /** The checks, in the order they ran. */
+    readonly checks: readonly string[];
+  };
+}
+
+/** "5000000 atomic units" — with the grammar surviving an amount of 1. */
+const atomicUnits = (amount: bigint): string =>
+  `${amount.toString()} atomic unit${amount === 1n ? "" : "s"}`;
+
+/**
+ * The settled amount next to the quote, so "did I pay what was asked?" is
+ * answerable from this one line — the exact/excess/short qualifier restates
+ * the fulfilment in numbers rather than asking the reader to trust a word.
+ */
+function settledLine(verdict: SettlementVerdict): string {
+  const { fulfilment } = verdict;
+  if (!("received" in fulfilment)) return "nothing credited under these terms";
+  const received = atomicUnits(fulfilment.received);
+  switch (fulfilment.status) {
+    case "paid":
+      return `${received} — exact`;
+    case "overpaid":
+      return `${received} — ${fulfilment.excess.toString()} over`;
+    case "underpaid":
+      return `${received} — ${fulfilment.shortfall.toString()} short`;
+    default:
+      return received;
+  }
+}
+
+/**
+ * The delivered-content panel — its own card, its own trust register,
+ * deliberately OUTSIDE the settlement banner: the seal's authority must not
+ * bleed onto bytes the chain never saw. Three registers, mirroring the
+ * settlement wording discipline ("verified" is reserved for cryptography):
+ * Register naming states what the panel IS, never what is missing — an
+ * absent commitment is a server feature gap, not a payment failure, and
+ * must not read like one:
+ *   SERVER COMMITTED   the server's signature verifies over the received bytes
+ *   COMMITMENT BROKEN  a commitment was claimed and does NOT verify — loud, kept
+ *   AGENT RECORD       no commitment offered — the hash is the agent's own note
+ */
+function contentPanel(content: DeliveredContent): string {
+  const { commitment } = content;
+  // The register — badge and wording — is verdict-view's to decide; this
+  // renderer only owns the presentation (CSS class, markup, escaping).
+  const register = contentRegister(content);
+  const badgeClass =
+    register.badge === "SERVER COMMITTED"
+      ? "commit"
+      : register.badge === "AGENT RECORD"
+        ? "mute"
+        : "bad";
+  const signerRows =
+    commitment === undefined
+      ? ""
+      : `
+    <div><dt>Signer</dt><dd><code>${escapeHTML(commitment.signer)}</code></dd></div>
+    <div><dt>Signature</dt><dd><code>${escapeHTML(commitment.signatureB64)}</code></dd></div>`;
+  return `<section class="x402-card x402-content">
+  <p class="x402-eyebrow">Delivered content</p>
+  <div class="x402-top">
+    <span class="x402-badge ${badgeClass}">${register.badge}</span>
+  </div>
+  <p class="x402-content-line">${escapeHTML(register.line)}</p>
+  <dl class="x402-meta">
+    <div><dt>Content sha-256</dt><dd><code>${escapeHTML(content.sha256)}</code></dd></div>${signerRows}
+  </dl>
+  <p class="x402-method">A commitment binds bytes to a payment. It does not make the data true — data truth would need the upstream source&#39;s own signature.</p>
+</section>`;
+}
+
+/**
+ * The human-approval panel — who consented to THIS payment, re-verifiable.
+ * Two registers only: the signature holds against the approver's on-chain
+ * key, or it was claimed and does not — an unverifiable consent is loud,
+ * never quietly displayed as fact.
+ */
+function consentPanel(consent: NonNullable<ReceiptOptions["consent"]>): string {
+  const register = consentRegister(consent);
+  const badgeClass = register.badge === "HUMAN APPROVED" ? "human" : "bad";
+  return `<section class="x402-card x402-content">
+  <p class="x402-eyebrow">Human approval</p>
+  <div class="x402-top">
+    <span class="x402-badge ${badgeClass}">${register.badge}</span>
+  </div>
+  <p class="x402-content-line">${escapeHTML(register.line)}</p>
+  <dl class="x402-meta">
+    <div><dt>Approver</dt><dd><code>${escapeHTML(consent.approver)}</code></dd></div>
+    <div><dt>Signed challenge</dt><dd><code>${escapeHTML(consent.terms)}</code></dd></div>
+    <div><dt>Signature</dt><dd><code>${escapeHTML(consent.signatureB64)}</code></dd></div>
+  </dl>
+  <p class="x402-method">Consent binds a human to these terms. It does not move money — the settlement above did that, and is proven separately.</p>
+</section>`;
+}
+
+/**
+ * The proof panel — the block-proof rung's working, shown. A receipt that
+ * says "cryptographically verified" without saying WHAT was checked asks
+ * for the very trust this repo exists to remove.
+ */
+function proofPanel(proof: NonNullable<ReceiptOptions["proof"]>): string {
+  const checks = proof.checks
+    .map((check) => `<div><dt>Checked</dt><dd class="x402-prose">${escapeHTML(check)}</dd></div>`)
+    .join("\n    ");
+  return `<section class="x402-card x402-content">
+  <p class="x402-eyebrow">The proof&#39;s working</p>
+  <div class="x402-top">
+    <span class="x402-badge proof-badge">BLOCK PROOF</span>
+  </div>
+  <p class="x402-content-line">Nothing below was believed until every check here held — one flipped byte anywhere in the block and this receipt would not exist.</p>
+  <dl class="x402-meta">
+    <div><dt>Source</dt><dd class="x402-prose">${escapeHTML(proof.source)}</dd></div>${
+      proof.anchor !== undefined
+        ? `\n    <div><dt>Anchor</dt><dd class="x402-prose">${escapeHTML(proof.anchor)}</dd></div>`
+        : ""
+    }
+    ${checks}
+  </dl>
+  <p class="x402-method">Cryptography, not attestation: these checks recompute the ledger&#39;s own commitments — no operator, mirror, or facilitator is trusted anywhere above.</p>
+</section>`;
+}
+
 /**
  * The verdict + receipts as one printable HTML document. Everything shown is
  * derived from the *verified* verdict — never echoed from a facilitator's
  * response — so what the reader sees is what the chain said.
  */
-export function settlementReceiptHTML(verdict: SettlementVerdict): string {
-  // Say HOW it was verified — the receipts carry their provenance, and the
-  // banner must not claim the mirror for a block-proof verdict (or vice versa).
-  const proven = verdict.receipts.some((receipt) => receipt.provenance.kind === "verified");
-  // Wording discipline (review request): "verified" is reserved for the
-  // block-proof rung — cryptography. The mirror path is an independent
-  // *record*: the operator's attested data, re-checkable by anyone but not
-  // proven. So it is a "mirror receipt", never "verified" — the banner must
-  // not contradict the body, which already stamps the mirror receipt UNVERIFIED.
-  const method = proven
-    ? "Verified against the ledger&#39;s own block proof — cryptography, not the facilitator&#39;s word."
-    : "Read from the public mirror node — the operator&#39;s attested record, not the facilitator&#39;s word.";
+export function settlementReceiptHTML(
+  verdict: SettlementVerdict,
+  options: ReceiptOptions = {},
+): string {
+  // HOW it was verified — and the wording discipline that goes with it
+  // ("verified" is reserved for the block-proof rung) — is verdict-view's
+  // single decision; the banner must not contradict the body, which already
+  // stamps the mirror receipt UNVERIFIED.
+  const { proven, method } = settlementRegister(verdict);
   const eyebrow = proven ? "Certificate of settlement · block proof" : "Mirror receipt";
   const title = proven
     ? "x402 settlement — independently verified"
@@ -80,6 +247,8 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
   <dl class="x402-meta">
     <div><dt>Reference</dt><dd><code>${escapeHTML(verdict.request.reference)}</code></dd></div>
     <div><dt>Transaction</dt><dd><code>${escapeHTML(verdict.transactionId)}</code></dd></div>
+    <div><dt>Quoted</dt><dd><code>${atomicUnits(verdict.request.amount)}</code></dd></div>
+    <div><dt>Settled</dt><dd><code>${escapeHTML(settledLine(verdict))}</code></dd></div>
   </dl>
   ${
     verdict.hashscanUrl !== undefined
@@ -91,16 +260,33 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
       ? `<p class="x402-proof x402-mirror"><a href="${escapeHTML(verdict.mirrorUrl)}">View the raw mirror-node record <span aria-hidden="true">↗</span></a> — the JSON this verdict was read from.</p>`
       : ""
   }
-  <p class="x402-method">${method}</p>
+  <p class="x402-method">${escapeHTML(method)}</p>
+  ${options.caveat !== undefined ? `<p class="x402-caveat">${escapeHTML(options.caveat)}</p>` : ""}
 </header>`;
   const bodies = verdict.receipts.map((receipt) => toHTML(receipt)).join("\n");
+  const content = options.content === undefined ? "" : `\n${contentPanel(options.content)}`;
+  const consent = options.consent === undefined ? "" : `\n${consentPanel(options.consent)}`;
+  const proof = options.proof === undefined ? "" : `\n${proofPanel(options.proof)}`;
   // ONE column for everything — the banner and the receipt bodies share the
   // same width and left edge, instead of two containers eyeballing centers.
   // hiero-receipts caps its card at 420px and ships a LIGHT card; the trailing
   // override <style> (source-order wins) both stretches it to the shared column
   // AND re-themes .rcpt to this document's dark instrument palette, so the
   // embedded ledger and the certificate above it read as one artifact.
-  const theme = `<style>
+  return `<div class="x402-wrap">
+${THEME}
+<div class="x402-brand"><span class="mark">x4</span>hiero-x402 <small>verifiable settlement</small></div>
+${banner}${proof}${consent}${content}
+<div class="x402-bodies">${bodies}</div>
+<footer class="x402-foot"><span>hiero-x402 · x402 on Hiero with verifiable settlement</span><span>independent · facilitator-free verification</span></footer>
+${RCPT_OVERRIDE}
+</div>`;
+}
+
+// The document's two static stylesheets, hoisted to module scope — they
+// interpolate nothing, so rebuilding them per receipt only buried the
+// assembly logic under ~110 lines of CSS.
+const THEME = `<style>
   :root{
     --ink:#0b0a10;--panel:#151220;--panel-2:#100e19;--line:#272235;--line-2:#332c46;
     --text:#eceaf4;--muted:#9d97ae;--faint:#6c657d;
@@ -146,6 +332,12 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
     border:1px solid;text-transform:uppercase;font-family:var(--mono)}
   .x402-badge.ok{color:var(--proof);border-color:rgba(61,212,160,.42);background:rgba(61,212,160,.1)}
   .x402-badge.warn{color:var(--warn);border-color:rgba(243,182,77,.42);background:rgba(243,182,77,.1)}
+  .x402-badge.commit{color:var(--brand-soft);border-color:rgba(128,113,255,.42);background:rgba(128,113,255,.12)}
+  .x402-badge.bad{color:var(--danger);border-color:rgba(244,116,107,.42);background:rgba(244,116,107,.1)}
+  .x402-badge.mute{color:var(--muted);border-color:var(--line-2);background:rgba(255,255,255,.04)}
+  .x402-badge.human{color:var(--warn);border-color:rgba(243,182,77,.42);background:rgba(243,182,77,.1)}
+  .x402-badge.proof-badge{color:var(--gold);border-color:rgba(230,185,104,.42);background:rgba(230,185,104,.1)}
+  .x402-content-line{margin:0 0 1rem;color:var(--text);font-size:.92rem;max-width:36rem}
   .x402-chip{font-size:.68rem;letter-spacing:.08em;padding:.24rem .62rem;border-radius:6px;color:var(--brand-soft);
     border:1px solid rgba(128,113,255,.42);background:rgba(128,113,255,.12);font-family:var(--mono)}
   .x402-eyebrow{margin:0 0 .3rem;font-size:.68rem;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--faint)}
@@ -160,10 +352,14 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
   .x402-meta dt{color:var(--faint);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em}
   .x402-meta dd{margin:0;font-family:var(--mono);font-size:.82rem;color:var(--brand-soft);
     word-break:break-all;text-align:right}
+  /* prose values (proof checks, sources) wrap at words — break-all is for hashes */
+  .x402-meta dd.x402-prose{word-break:normal;overflow-wrap:break-word}
   .x402-proof{margin:0 0 .65rem;font-size:.88rem;color:var(--muted)}
   .x402-proof a{color:var(--proof);text-decoration:none;font-weight:600}
   .x402-proof a:hover{text-decoration:underline}
   .x402-method{margin:0;color:var(--faint);font-size:.8rem}
+  .x402-caveat{margin:.75rem 0 0;padding:.55rem .8rem;border:1px solid rgba(243,182,77,.35);
+    border-radius:10px;background:rgba(243,182,77,.07);color:var(--warn);font-size:.8rem}
   .x402-bodies{display:flex;flex-direction:column;gap:1rem}
   .x402-brand{display:flex;align-items:center;gap:.65rem;font-weight:650;letter-spacing:-.01em;color:var(--text)}
   .x402-brand .mark{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;font-family:var(--mono);
@@ -180,9 +376,9 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
     .x402-title{color:#111}.x402-verdict{color:#111}.x402-brand,.x402-brand small{color:#333}
   }
 </style>`;
-  // The dark re-theme of the embedded hiero-receipts card — MUST come last so
-  // it overrides the library's own light <style> by source order.
-  const rcptOverride = `<style>
+// The dark re-theme of the embedded hiero-receipts card — MUST come last so
+// it overrides the library's own light <style> by source order.
+const RCPT_OVERRIDE = `<style>
   .rcpt{max-width:none;width:100%;box-sizing:border-box;background:linear-gradient(180deg,var(--panel),var(--panel-2));
     border:1px solid var(--line);border-radius:18px;color:var(--text);padding:1.4rem 1.6rem;font-family:var(--sans)}
   .rcpt .who{color:var(--faint);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;margin:0 0 .5rem}
@@ -200,12 +396,3 @@ export function settlementReceiptHTML(verdict: SettlementVerdict): string {
   @media print{.rcpt{background:#fff;color:#1a1d24;border-color:#d8dce2}.rcpt h3{color:#111}
     .rcpt td.v{color:#1a1d24}.rcpt .who,.rcpt td.k,.rcpt .prov{color:#5b6472}}
 </style>`;
-  return `<div class="x402-wrap">
-${theme}
-<div class="x402-brand"><span class="mark">x4</span>hiero-x402 <small>verifiable settlement</small></div>
-${banner}
-<div class="x402-bodies">${bodies}</div>
-<footer class="x402-foot"><span>hiero-x402 · x402 on Hiero with verifiable settlement</span><span>independent · facilitator-free verification</span></footer>
-${rcptOverride}
-</div>`;
-}

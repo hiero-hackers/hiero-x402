@@ -6,256 +6,210 @@
 [![Node >=20](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/hiero-hackers/hiero-x402/badge)](https://scorecard.dev/viewer/?uri=github.com/hiero-hackers/hiero-x402)
 
-**x402 on Hiero with verifiable settlement and receipts.** The official
-`@x402/*` packages move the money; this repo proves it moved — an
-independent, facilitator-free settlement check and a receipt artifact for
-every payment an agent makes. Prototype, **testnet only** (enforced in code).
-
-Every x402 flow ends with a `SettleResponse`: a claim, made by the party that
-moved the money, that the money moved. Every reference implementation stops
-there. Here, the agent — spending with no human in the loop — walks the
-remaining distance itself: it looks the settlement up on the network's public
-mirror node, normalizes what actually landed, judges it against the original
-terms, and writes itself a receipt with the HashScan proof link.
+**Agents that pay per request — and keep receipts that prove it.** The
+official `@x402/*` packages move the money — **HBAR or USDC, the buyer's
+choice per request**; every other flow
+stops at the facilitator's word that it moved. Here the agent checks the
+chain itself, the server cryptographically **commits to the bytes it
+served**, and every run files a **receipt** — settlement, delivered
+content, human consent, each panel independently verifiable, up to a
+block-proof receipt stamped VERIFIED by cryptography alone. The whole
+trail lands on a **public HCS audit log** that `npm run audit` re-verifies
+with no one's cooperation. Prototype, **testnet only** (enforced in code).
+System map: [docs/architecture.md](docs/architecture.md).
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant A as agent (client key)
-    participant S as resource server (NO keys)
-    participant F as facilitator (fee-payer key)
-    participant H as Hedera testnet
-    participant M as public mirror node
+flowchart LR
+    A["🤖 agent"] -- "pays a 402<br/>HBAR / USDC" --> S["server"]
+    S -- "data + signed<br/>sha-256 of the bytes" --> A
+    A -- "verifies<br/>on-chain" --> M["public mirror"]
+    A -- "files" --> R["🧾 receipt<br/>every panel provable"]
+    A -- "attests" --> H["HCS audit log"]
+    H -- "npm run audit<br/>anyone, forever" --> V["✓ re-verified"]
+```
 
-    A->>S: GET /data/spot-price
-    S-->>A: 402 + terms (0.05 ℏ, extra.feePayer)
-    A->>S: retry + payment-signature (partially signed TransferTransaction)
-    S->>F: /verify, then /settle
-    F->>H: co-sign as fee payer + submit
-    S-->>A: 200 + data + payment-response { transactionId }
-    Note over A,M: this repo's contribution
-    A->>M: look the settlement up yourself
-    A->>A: fromMirror → match → verdict + receipt.html
+## Proof (real testnet run, 2026-07-31)
+
+```
+[agent] 5 · 200 — data: {"product":"spot-price","mock":false,"symbol":"HBAR","price":0.068036,"currency":"USD","source":"hedera-network-exchange-rate","rateExpiresAt":1785502800}
+[agent]     settlement claims transaction 0.0.6502504@1785501679.860897624
+[agent] 6 · VERIFYING — the mirror node, not the facilitator's word
+[agent]     Paid in full — the chain confirms the exact amount landed.
+[agent]     charged: quoted 0.05000000 ℏ (5,000,000 tinybar) → settled 0.05000000 ℏ (5,000,000 tinybar) — exact; network fee paid by the sponsor, not the agent
+[agent]     hashscan: https://hashscan.io/testnet/transaction/1785501684.589679895
+[agent] 6½ · content COMMITTED — 0.0.9651303 signed sha-256 79377a6fb9028868… against this settlement (key mirror-checked)
+[agent] 7 · receipt written to receipt.html
+[agent] 8 · verdict attested to HCS topic 0.0.9855803
+```
+
+**[The settlement on HashScan](https://hashscan.io/testnet/transaction/1785501684.589679895)** —
+real data (the chain's own exchange rate), exact amount, committed content,
+attested — anyone can re-run the check from the transaction id. Every commitment on the [public audit
+topic](https://hashscan.io/testnet/topic/0.0.9855803) re-verifies from
+public data alone: `npm run audit`.
+
+<img src="docs/hashscan-settlement.png" width="640" alt="the settlement on HashScan — SUCCESS, payer, fees, consensus time: the public page anyone uses to re-check the transfer, no tooling required" />
+
+## The receipts — the proof you keep
+
+The receipt is the product, and there are two — one per rung of the trust
+ladder above the facilitator's word (where every other x402 flow stops):
+
+- the **mirror receipt** — every paid run, checked against the public
+  mirror: independent and re-checkable by anyone, still operator-attested,
+  so it is honestly stamped **UNVERIFIED**;
+- the **block-proof receipt** — merkle root recomputed, threshold signature
+  verified, before a single field is believed: the only receipt this repo
+  stamps **VERIFIED**. The proof is a real **Hiero block-stream** proof —
+  the wiring just isn't on testnet yet (HIP-1056), so today it runs on a
+  committed real previewnet block; the cryptography is live either way.
+  One click in the hub, or `npm run provenance` (no keys, no env, no
+  network).
+
+Same verdict pipeline, different rung; each panel on either is an
+independently verifiable claim in its own trust register — never borrowing
+authority from the one above it.
+
+- **Settlement** — quoted vs settled to the atomic unit, the transaction
+  id, live proof links; stamped for HOW it was read (mirror record vs
+  block proof — "verified" is reserved for cryptography).
+- **Delivered content** — `SERVER COMMITTED`: the server signed sha-256 of
+  the exact bytes against this settlement; it can never deny what it
+  served. Re-hash the content and check.
+- **Human approval** — who signed which one-time challenge, re-verified
+  against their on-chain key.
+- **The proof's working** (block receipts) — source block, anchor, and the
+  checks that held before a single field was believed.
+
+<img src="docs/receipt.png" width="390" alt="mirror receipt: Paid in full, quoted and settled amounts, HashScan link, and the Delivered content panel (SERVER COMMITTED, sha-256, signer, signature)" /> <img src="docs/verified-receipt.png" width="390" alt="block-proof receipt: gold BLOCK PROOF seal, the proof's working (source, anchor, checks), the beta caveat naming the previewnet fixture, and the body stamped VERIFIED" />
+
+> **Block receipts are beta, and say so on their face**: HIP-1056 block
+> streams haven't reached testnet, so the proof runs on a committed real
+> **previewnet** block (its true consensus date shows). The amber caveat is
+> printed on the receipt itself — the artifact never pretends. And the
+> library is **testnet-ready today**: the block source is injected
+> ([src/stream.ts](src/stream.ts)), so the day streams land, live x402
+> settlements gain VERIFIED receipts by swapping the source — zero code
+> changes to the pipeline, the receipts, or the stamps.
+
+## Safety: no spend without consent
+
+_"Impossible to use or drain a user's funds without their explicit
+consent"_ — here that is mechanism, not policy:
+
+1. **Exact-amount signing** — one transfer per run, precisely the advertised
+   amount, nothing else.
+2. **Spend cap before the signature** — over-cap quotes are refused, in the
+   quote's own asset, before anything is signed.
+3. **Human gates** — button approval, or a wallet-signed single-use
+   challenge verified against the approver's on-chain key.
+4. **Key isolation** — three processes, three keys, none shared; the server
+   holds no payment keys.
+5. **Testnet gate in code** ([src/config.ts](src/config.ts)) — mainnet is a
+   code change, not a config change.
+
+And the agent **verifies every spend after the fact** — consent going in,
+proof coming out. The gates, on screen — real runs, verbatim (the first
+two cost nothing: both refusals fire before anything is signed):
+
+<img src="docs/safety-exact.png" width="640" alt="verbatim narration: the 402 quote, partial signing, and charged: quoted 0.05 ℏ → settled 0.05 ℏ — exact; fee paid by the sponsor" />
+
+<img src="docs/safety-cap.png" width="640" alt="verbatim narration: REFUSED by spend policy — the quote exceeds the cap; nothing signed, nothing spent" />
+
+<img src="docs/safety-controls.png" width="640" alt="the hub's run controls: three run modes, the pay-for picker on the USDC route, and the max-spend filter denominated in USDC" />
+
+<img src="docs/safety-approve.png" width="640" alt="the live human gate: the run paused on 'human approves the spend', the exact terms shown, Approve payment / Decline buttons — nothing signed yet" />
+
+<img src="docs/safety-wallet-approve.png" width="640" alt="the live  gate: the run paused on 'human approves the spend via wallet approval'" />
+
+<img src="docs/safety-hashpack.png" width="640" alt="HashPack signing the one-time challenge: the exact terms plus a fresh nonce and issue time — a captured signature approves nothing later. Signed successfully against the approver's on-chain key" />
+
+## The Hedera integration, verifiable
+
+| Surface                                     | Where                                                          | Public proof                                                                                                                 |
+| ------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| HBAR transfers, fee-payer sponsored         | [demo/agent.ts](demo/agent.ts) + facilitator                   | [settled run](https://hashscan.io/testnet/transaction/1785501684.589679895)                                                  |
+| HTS payments (official testnet USDC)        | `/data/fx` + hub asset picker                                  | [token 0.0.429274](https://hashscan.io/testnet/token/0.0.429274)                                                             |
+| Mirror-node REST (settlement, keys, topics) | [src/verify.ts](src/verify.ts), [demo/audit.ts](demo/audit.ts) | [the raw record a verdict reads](https://testnet.mirrornode.hedera.com/api/v1/transactions/0.0.6502504-1785501679-860897624) |
+| HCS attestation log                         | [src/attestation.ts](src/attestation.ts)                       | [live topic 0.0.9855803](https://hashscan.io/testnet/topic/0.0.9855803) · `npm run audit`                                    |
+| Network exchange rate                       | `/data/spot-price` serves it live                              | [the endpoint](https://testnet.mirrornode.hedera.com/api/v1/network/exchangerate)                                            |
+| HIP-1056 block streams                      | [src/stream.ts](src/stream.ts)                                 | `npm run provenance` — offline, keyless                                                                                      |
+| HIP-820 wallet signing (HashPack)           | hub wallet-approval mode                                       | the consent panel on any wallet-approved receipt                                                                             |
+
+**One paid request, by the numbers:**
+
+- **2 on-chain transactions** — the fee-payer-sponsored transfer (**HBAR or
+  USDC**, switchable per request from the hub) and its HCS attestation;
+- **4 Hedera services in one flow** — transfer/HTS settlement, a consensus
+  topic, the mirror REST API, and the network's own exchange-rate feed
+  (which is also the data being sold);
+- **4+ mirror lookups, all free** — the agent's key check, the settlement
+  record, the content-signer's key, the approver's key in wallet mode;
+- **up to 3 signatures verified post-settlement** — the settlement itself
+  against the chain, the server's content commitment, and the human's
+  consent — each against on-chain keys, none on anyone's word.
+
+Fees are fixed and sub-cent, finality is seconds, the mirror is free: one
+modest paid API at 10 req/s is **~1.7M Hedera transactions a day**, each
+with a verifiable receipt.
+
+## Fed back to the ecosystem
+
+Runs entirely on published packages — no forks — and upstreamed what it
+learned as **shipped versions** in the **Hiero ecosystem**: all open
+source, all **Apache-2.0**, installable by any Hedera builder today:
+[`byTransactionId`](https://github.com/hiero-hackers/hiero-payment-requests)
+(payment-requests v0.1.2) ·
+[`mirror-fetch`](https://github.com/hiero-hackers/hiero-receipts)
+(receipts v0.2.0) · true block-stream transaction ids
+([streams-node](https://github.com/hiero-hackers/streams-node) v0.2.0) ·
+x402 challenges as a [hiero-checkout](https://hiero-hackers.github.io/hiero-checkout/)
+entry — the same priced resource is a 402 for agents AND a checkout QR for
+humans, judged by the same rule:
+
+```mermaid
+flowchart LR
+    C["@x402/core · hedera · hono<br/>official x402 — moves the money"] --> X["hiero-x402<br/>(this repo)"]
+    subgraph HIERO["Hiero ecosystem — open source, Apache-2.0"]
+      P["hiero-payment-requests"]
+      R["hiero-receipts"]
+      SN["streams-node"]
+      CK["hiero-checkout"]
+    end
+    P -- "match · byTransactionId" --> X
+    R -- "fromMirror · toHTML" --> X
+    SN -- "block-stream proofs" --> X
+    X -. "fed back: byTransactionId" .-> P
+    X -. "fed back: mirror-fetch" .-> R
+    X -. "fed back: true tx ids" .-> SN
+    X -. "fed back: x402 checkout entry" .-> CK
 ```
 
 ## Run it
 
-Two funded **ECDSA testnet** accounts ([faucet](https://portal.hedera.com/faucet)):
-one for the facilitator (sponsors network fees), one for the agent (pays).
-The resource server holds no keys at all.
+Two funded ECDSA testnet accounts: facilitator (sponsors fees) and agent
+(pays); the server holds no payment keys. Testnet **HBAR** is free from the
+[Hedera Portal faucet](https://portal.hedera.com/faucet); testnet **USDC**
+for the token route comes from [Circle's faucet](https://faucet.circle.com)
+(pick Hedera Testnet — auto-association does the rest).
 
 ```sh
-npm install            # @hiero-hackers packages come from GitHub Packages —
-                       # you need the usual read:packages token in ~/.npmrc
+npm install            # @hiero-hackers packages need a read:packages token
 cp .env.example .env   # fill in the two accounts
-npm run demo           # both rails, in order: facilitator (:4020) then
-                       # server (:4021) — hub at http://localhost:4021/ui
+npm run demo           # facilitator (:4020) + server (:4021) — hub at :4021/ui
 npm run e2e            # the agent: 402 → sign → 200 → VERIFY → receipt.html
 ```
 
-(The rails stay separate processes — the facilitator holds the fee-payer
-key, the server holds none, the agent holds its own — `npm run demo` just
-boots the first two in one terminal. `npm run facilitator` and
-`npm run server` still exist for running them apart.)
-
-**Three ways to demo it.** The hub's Run button has a run-mode selector:
-
-- **Autonomous** (default) — no human in the loop; the bounty's thesis.
-- **Hub button** — the agent pauses at step 2½ — terms known, **nothing
-  signed** — and the hub shows the exact spend to Approve or Decline; the
-  "human" chip on the rails appears only in approval modes. Same gate from a
-  terminal: `HUMAN_APPROVAL=1 npm run e2e` (answer y/N on stdin).
-- **Wallet-signed** — the approval itself becomes verifiable: the human's
-  wallet signs the exact terms line, the hub verifies the signature against
-  the approver's on-chain key (`APPROVER_ACCOUNT_ID`, key resolved from the
-  mirror at boot) before releasing the gate, and the signed consent rides
-  into the HCS attestation — the audit trail then records WHO approved WHICH
-  terms. Needs `APPROVER_ACCOUNT_ID` + `WALLETCONNECT_PROJECT_ID` (free, from
-  cloud.reown.com) in `.env`.
-
-The agent still leads every step in all three: it discovered the price, and
-after approval it signs, retries, verifies against the mirror, and writes its
-own receipt. Decline and the run ends with nothing signed, nothing spent.
-And the epistemics stay honest: signed consent doesn't force the agent's
-hand — the binding is post-hoc, exactly this repo's posture: the verifier
-checks the on-chain settlement against the terms, and the attestation now
-carries the human's signature over those same terms.
-
-The agent narrates each protocol step; the run ends with the verdict, the
-HashScan link, and `receipt.html` on disk. It exits non-zero unless the
-mirror confirms the exact amount landed — data paid for on the facilitator's
-word alone is treated as not paid for.
-
-Four knobs worth knowing (all in [.env.example](.env.example)):
-
-- **`ATTEST_TOPIC_ID=create`** — after verifying, the agent writes the
-  verdict to a **Hedera Consensus Service topic**: an append-only public
-  audit log of every payment it made and checked. An auditor needs the topic
-  id, not the agent's cooperation. (The reference implementation defers "HCS
-  attestation" — this is that feature, live:
-  [topic 0.0.9672190](https://hashscan.io/testnet/topic/0.0.9672190) holds a
-  real attested verdict from a real paid run.)
-
-- **`RESOURCE=/data/fx`** — a route priced in **testnet USDC** (the official
-  token id from `@x402/hedera`). Needs an agent holding testnet USDC and an
-  associated `payTo`; the facilitator's preflight refuses cleanly otherwise.
-- **`VERIFY_BEFORE_SERVE=1`** — the server itself withholds data until the
-  settlement verifies on the public mirror, closing the
-  verify-pass/settle-fail window the reference implementations accept.
-  Off by default, deliberately: it costs honest seconds of mirror lag per
-  paid request, the merchant's exposure is bounded at one response, and the
-  agent verifies regardless — flip it on when one response is worth more
-  than seconds (reasoning in [SECURITY.md](SECURITY.md)).
-- **`ALLOWED_PAY_TO` / `MAX_AMOUNT`** — facilitator policy: which
-  requirements this fee payer will sponsor at all (the spec's
-  "implementations MAY introduce stricter limits", made concrete).
-
-## Proof (real testnet run, 2026-07-21)
-
-```
-[agent] 1 · GET http://localhost:4021/data/spot-price?symbol=HBAR
-[agent] 2 · 402: 5000000 tinybar of 0.0.0 → 0.0.9651206 (feePayer 0.0.6502504 sponsors the network fee)
-[agent] 3 · signing the transfer (partially — the fee payer signs last)
-[agent] 4 · retrying with payment attached
-[agent] 5 · 200 — data: {"product":"spot-price","symbol":"HBAR","price":11.48,"currency":"USD"}
-[agent]     settlement claims transaction 0.0.6502504@1784634414.257402675
-[agent] 6 · VERIFYING — the mirror node, not the facilitator's word
-[agent]     Paid in full — the chain confirms the exact amount landed.
-[agent]     proof: https://hashscan.io/testnet/transaction/1784634418.453138104
-[agent] 7 · receipt written to receipt.html
-```
-
-**[View the settlement on HashScan](https://hashscan.io/testnet/transaction/1784634418.453138104)** —
-agent `0.0.6280387` −5,000,000 tinybar → `0.0.9651206` +5,000,000, network fee
-sponsored by `0.0.6502504`. Anyone can re-run the check from the transaction id.
-
-The receipt the agent filed for that run — the verdict, the terms, and the
-proof link in one printable document:
-
-<img src="docs/receipt.png" width="480" alt="receipt.html: 'x402 settlement — independently verified. Paid in full — the chain confirms the exact amount landed', with reference, transaction id, HashScan link, and the hiero-receipts body 'You received 0.05000000 ℏ from 0.0.6280387'" />
-
-**The verifier caught a real discrepancy on its first live run.** Our initial
-configuration reused the facilitator's account as `payTo`; the facilitator
-reported success, but the agent's mirror check answered
-_"Underpaid — less than the required amount landed"_
-([proof](https://hashscan.io/testnet/transaction/1784633796.552851104)):
-because the receiving account also sponsored the fee, it netted the price
-**minus the fee**. Every party trusting the facilitator's word would have
-called that paid. The chain-checking agent didn't — which is the entire
-thesis of this repo, demonstrated by accident on day one.
-
-## Why independent verification
-
-The x402 flow is sound, but every party downstream of the facilitator takes
-its word: the reference server's own README concedes that a verify-pass /
-settle-fail delivers data without payment landing, and no client checks the
-chain. For autonomous agents that's exactly backwards — the party with no
-human in the loop is the one that most needs receipts it can prove. The check
-here is not bespoke: it is the **same `match` rule** hiero-checkout's
-merchant and payer already share, so three parties agree on what "paid"
-means, none by trusting another's word.
-
-| Concern                                     | Where it lives                                                                      |
-| ------------------------------------------- | ----------------------------------------------------------------------------------- |
-| x402 wire, schemes, middleware, facilitator | official `@x402/core` / `@x402/hedera` / `@x402/hono` — deliberately not rebuilt    |
-| Requirements ⇄ `PaymentRequest` bridge      | [`src/requirements.ts`](src/requirements.ts)                                        |
-| Settlement → mirror → verdict               | [`src/verify.ts`](src/verify.ts) — correlation via `byTransactionId`                |
-| The receipt artifact                        | [`src/receipt.ts`](src/receipt.ts) → hiero-receipts `toHTML`                        |
-| Mirror access                               | `hiero-receipts/mirror-fetch` + the testnet gate ([`src/config.ts`](src/config.ts)) |
-
-## Why Hedera (and what this does for the network)
-
-Pay-per-call only works where fees are **fixed and sub-cent** — a percentage
-fee or a gas auction eats a $0.0005 API call alive. Add seconds-fast
-finality and a free public mirror to verify against, and x402's design
-assumptions read like Hedera's spec sheet. The network effects run the
-other way too: **every paid API call is an on-chain transaction** (agents
-consuming micropriced data are a TPS engine, not a burden), and fee-payer
-sponsorship means a paying agent needs **no pre-funded gas at all** — the
-lowest-friction account-onboarding story in the ecosystem.
-
-## The integration fed the ecosystem back
-
-This build runs entirely on published packages — no forks, no patches — and
-upstreamed what it learned, the same week it learned it:
-
-- **`byTransactionId`** correlation strategy → `hiero-payment-requests`
-  v0.1.2. x402 payments carry no memo, but the protocol knows its settlement
-  transaction — correlation by identity, through the library's documented
-  strategy seam.
-- **`mirror-fetch`** subpath → `hiero-receipts` v0.2.0. The thin REST access
-  two repos had independently grown, extracted once.
-- **x402 challenges as a checkout entry** →
-  [hiero-checkout](https://hiero-hackers.github.io/hiero-checkout/): paste a
-  402 body — or the raw base64 `payment-required` header — and it renders as
-  a human-payable card.
-
-That last one is the quiet bonus of the design: the demo server's catalog
-(`GET /`) offers every priced resource **both ways** from one object — the
-402 challenge for agents, a checkout link/QR for people — and the same rule
-judges both payments. It even works as a deep link: put the base64
-`payment-required` header value in checkout's URL fragment and the agent's
-challenge renders as a human-payable card, watching the chain live:
-
-<img src="docs/checkout-x402.png" width="420" alt="hiero-checkout rendering an x402 challenge as a payer card: 'x402 · http://localhost:4021/data/spot-price', 0.05 ℏ to 0.0.9651206 on testnet, Pay now, the resource URL as the required memo, live payment watching" />
-
-(Screenshots are reproducible output, not relics: `npm run screenshots`
-regenerates both receipt images from fresh `e2e` / `provenance` runs.)
-
-## The next rung: proof, not attestation
-
-Look closely at the receipt above: the hiero-receipts body is stamped
-**UNVERIFIED**. That is honesty, not a defect — mirror data is the network
-operator's _attested_ record, so the receipt says exactly that. The full
-trust ladder:
-
-1. **The facilitator's word** — where every other x402 flow stops.
-2. **The public mirror node** — what `npm run e2e` checks: independent and
-   re-checkable by anyone, but still operator-attested.
-3. **The block stream's own proof** — recomputed merkle root + threshold
-   signature, verified before a single field is believed.
-
-Rung three already runs in this repo:
-
-```sh
-npm run provenance   # no keys, no env, no network — committed block fixtures
-```
-
-It verifies a real block's in-band proof (`@hiero-hackers/streams-node`),
-refuses to read the data at all if the proof fails, and emits a receipt
-stamped **"Cryptographically verified against the previewnet ledger"** —
-through the _same_ `source → receiptFor → match`-shaped pipeline as the e2e.
-
-The receipt it emits — same pipeline as the e2e's, one rung up, and the
-provenance stamp says so:
-
-<img src="docs/verified-receipt.png" width="480" alt="verified-receipt.html: 'x402 settlement — independently verified. Paid in full', the true transaction id 11.12.2@1774994518.000002058, 'Verified against the ledger's own block proof — cryptography, not the facilitator's word', and the hiero-receipts body stamped VERIFIED: 'Cryptographically verified against the previewnet ledger (block 467)'" />
-
-The honest caveat, stated plainly: HIP-1056 block streams are not on testnet
-yet, so this cannot verify our x402 settlement today — the fixtures are from
-the block-stream preview network. The day block streams reach testnet, the
-e2e's receipt flips from UNVERIFIED to VERIFIED by swapping the source;
-hiero-receipts was built around that seam.
-
-## What it deliberately doesn't do
-
-Hold keys outside the two demo processes that must · touch mainnet (the gate
-in [`src/config.ts`](src/config.ts) refuses it, in code, everywhere) · trust
-a facilitator's word · guess (unknown outcomes are reported as exactly what
-the chain shows: underpaid with the shortfall, wrong asset, not found).
+The hub at `:4021/ui` is the demo — every control below is on it. All
+knobs, one page: [docs/configuration.md](docs/configuration.md).
 
 ## Develop
 
-```sh
-npm run verify   # typecheck + lint + format + tests + coverage (floors at 100)
-```
-
-All tests run offline — canned mirror fixtures, injectable fetch; the only
-networked run is the demo itself. The bridge is property-tested against the
-official wire vectors shipped inside payment-requests.
-
-Research behind every decision: [research/](research/) · system map:
-[ARCHITECTURE.md](ARCHITECTURE.md).
+`npm run verify` — typecheck, lint, format, tests, coverage floored at
+**100% statements and branches**, all offline. Ground rules:
+[CONTRIBUTING.md](CONTRIBUTING.md) · security posture:
+[SECURITY.md](SECURITY.md) · the research that decided everything:
+[research/](research/).
 
 ## License
 

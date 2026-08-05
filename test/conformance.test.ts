@@ -8,7 +8,7 @@
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import { Buffer } from "node:buffer";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { fromAny } from "@hiero-hackers/hiero-payment-requests";
 import { PrivateKey } from "@x402/hedera";
@@ -134,6 +134,17 @@ describe("the demo hub (/ui)", () => {
     expect(html).toContain("Block proof");
   });
 
+  it("withholds receipts from earlier sessions — none until THIS boot writes one", async () => {
+    // A freshly-booted app can have no receipt of its own yet, so this must
+    // 404 even on a dev machine where a stale receipt.html sits on disk.
+    const response = await app.request("http://localhost/receipts/receipt");
+    expect(response.status).toBe(404);
+    expect(await response.text()).toContain("No receipt from this session yet");
+    // And the hub's card must offer no link to it, only the honest empty slot.
+    const hub = await app.request("http://localhost/ui");
+    expect(await hub.text()).toContain("none from this session yet");
+  });
+
   it("receipt routes 404 honestly for unknown names", async () => {
     expect((await app.request("/receipts/evil")).status).toBe(404);
   });
@@ -146,15 +157,23 @@ describe("the demo hub (/ui)", () => {
     expect(html).not.toContain('<button id="run-agent"'); // no button without a runner
   });
 
+  it("/demo/audit answers 501 honestly when no attestation topic is configured", async () => {
+    const response = await app.request("http://localhost/demo/audit");
+    expect(response.status).toBe(501);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("ATTEST_TOPIC_ID");
+  });
+
   it("/demo/run answers 501 honestly when no agent runner is attached", async () => {
     expect((await app.request("/demo/run")).status).toBe(501);
     expect((await app.request("/demo/approve", { method: "POST" })).status).toBe(501);
   });
 
-  it("verifies a wallet-signed approval against the approver's key before releasing the gate", async () => {
+  it("verifies a wallet-signed approval against a one-time challenge, and refuses replays", async () => {
     const approverKey = PrivateKey.generateED25519();
     const TERMS = "pay 5000000 tinybar of 0.0.0 to 0.0.7777 for /data/spot-price";
     const decisions: Array<[boolean, string | undefined]> = [];
+    let narration = new PassThrough();
     const withWallet = createApp({
       network: "hedera:testnet",
       payTo: PAY_TO,
@@ -164,7 +183,7 @@ describe("the demo hub (/ui)", () => {
       approver: { accountId: "0.0.4242", publicKey: approverKey.publicKey.toStringRaw() },
       walletProjectId: "test-project",
       runAgent: () => ({
-        narration: Readable.from(`[agent] 2½ · AWAITING HUMAN APPROVAL — ${TERMS}? (y/N)\n`),
+        narration,
         decide: (approve, consent) => decisions.push([approve, consent]),
       }),
     });
@@ -174,19 +193,52 @@ describe("the demo hub (/ui)", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-    const streaming = withWallet.request("/demo/run?approval=1");
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    const sign = (key: InstanceType<typeof PrivateKey>, message: string): string =>
+      Buffer.from(key.sign(Buffer.from(message, "utf8"))).toString("base64");
+
+    // Start a run, pause it at 2½, and read back the challenge the hub minted
+    // for THIS pause — the string a wallet is asked to sign.
+    const startPausedRun = async (): Promise<{
+      challenge: string;
+      finish: () => Promise<void>;
+    }> => {
+      narration = new PassThrough();
+      const response = await withWallet.request("/demo/run?approval=1");
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      narration.write(`[agent] 2½ · AWAITING HUMAN APPROVAL — ${TERMS}? (y/N)\n`);
+      let buffer = "";
+      let found = /event: challenge\ndata: (.+)\n\n/.exec(buffer);
+      while (found === null) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error("the run ended before a challenge arrived");
+        buffer += decoder.decode(chunk.value, { stream: true });
+        found = /event: challenge\ndata: (.+)\n\n/.exec(buffer);
+      }
+      return {
+        challenge: found[1]!,
+        finish: async () => {
+          narration.end();
+          let chunk = await reader.read();
+          while (!chunk.done) chunk = await reader.read();
+        },
+      };
+    };
+
+    const first = await startPausedRun();
+    expect(first.challenge).toContain(TERMS); // the agent's own terms, verbatim
+    expect(first.challenge).toMatch(/nonce [0-9a-f]{32}/);
     // Wrong signer account: refused.
     const stranger = PrivateKey.generateED25519();
-    const strangerSig = Buffer.from(stranger.sign(Buffer.from(TERMS, "utf8"))).toString("base64");
-    expect((await post({ accountId: "0.0.9999", signature: strangerSig })).status).toBe(403);
-    // Right account, signature over the WRONG terms: refused.
-    const wrongTerms = Buffer.from(
-      approverKey.sign(Buffer.from("something else", "utf8")),
-    ).toString("base64");
-    expect((await post({ accountId: "0.0.4242", signature: wrongTerms })).status).toBe(403);
-    // Right account, right terms: verified, gate released with the consent attached.
-    const goodSig = Buffer.from(approverKey.sign(Buffer.from(TERMS, "utf8"))).toString("base64");
+    expect(
+      (await post({ accountId: "0.0.9999", signature: sign(stranger, first.challenge) })).status,
+    ).toBe(403);
+    // Right account, but signing the bare terms line instead of the challenge: refused.
+    expect(
+      (await post({ accountId: "0.0.4242", signature: sign(approverKey, TERMS) })).status,
+    ).toBe(403);
+    // Right account, right challenge: verified, gate released with the consent attached.
+    const goodSig = sign(approverKey, first.challenge);
     const ok = await post({ approve: true, accountId: "0.0.4242", signature: goodSig });
     expect(ok.status).toBe(200);
     expect(decisions).toHaveLength(1);
@@ -198,8 +250,19 @@ describe("the demo hub (/ui)", () => {
       signature: string;
     };
     expect(parsed.accountId).toBe("0.0.4242");
-    expect(parsed.terms).toBe(TERMS);
-    await (await streaming).text();
+    // The record carries the nonce, so an auditor can re-verify from it alone.
+    expect(parsed.terms).toBe(first.challenge);
+    await first.finish();
+
+    // The whole point: that signature is spent. A fresh run mints a fresh
+    // nonce, so replaying it approves nothing.
+    const second = await startPausedRun();
+    expect(second.challenge).not.toBe(first.challenge);
+    expect((await post({ approve: true, accountId: "0.0.4242", signature: goodSig })).status).toBe(
+      403,
+    );
+    expect(decisions).toHaveLength(1);
+    await second.finish();
     await new Promise((resolve) => setTimeout(resolve, 150));
   });
 

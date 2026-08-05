@@ -7,6 +7,7 @@
  *   verify        did the chain actually pay it — the differentiator
  *   stream        the same verdict from a cryptographically PROVEN block
  *   receipt       the keepsake
+ *   content       what the server committed to serving for the payment
  *   attestation   the verdict's wire format for HCS audit logs
  *   errors        discriminable failure kinds (instanceof, not string-matching)
  *   mirror        the thin REST access verify rides on
@@ -19,12 +20,47 @@ export {
   toPaymentRequirements,
 } from "./requirements.js";
 export type { RequirementsOptions } from "./requirements.js";
-export { verifySettlement } from "./verify.js";
+export { readPaymentResponseHeader, verifySettlement } from "./verify.js";
 export type { SettlementVerdict, VerifyOptions } from "./verify.js";
 export { verifySettlementFromBlock } from "./stream.js";
 export type { BlockSource, StreamVerifyOptions } from "./stream.js";
-export { settlementReceiptHTML, verdictLine } from "./receipt.js";
-export { ATTESTATION_VERSION, attestationMessage, parseAttestation } from "./attestation.js";
+export { escapeHTML, settlementReceiptHTML, verdictLine } from "./receipt.js";
+export type { ReceiptOptions } from "./receipt.js";
+export {
+  consentRegister,
+  contentRegister,
+  settledFacts,
+  settlementRegister,
+} from "./verdict-view.js";
+export type {
+  ConsentBadge,
+  ConsentRegister,
+  ContentBadge,
+  ContentRegister,
+  SettledFacts,
+  SettlementRegister,
+  SettlementStamp,
+} from "./verdict-view.js";
+export {
+  CONTENT_COMMITMENT_VERSION,
+  CONTENT_SHA256_HEADER,
+  CONTENT_SIGNATURE_HEADER,
+  CONTENT_SIGNER_HEADER,
+  commitmentReference,
+  contentCommitmentHeaders,
+  contentCommitmentMessage,
+  isSha256Hex,
+  parseContentCommitment,
+  parseContentCommitmentHeaders,
+  sha256Hex,
+} from "./content.js";
+export type { ContentCommitment, DeliveredContent } from "./content.js";
+export {
+  ATTESTATION_VERSION,
+  attestationCommitmentMessage,
+  attestationMessage,
+  parseAttestation,
+} from "./attestation.js";
 export {
   BlockProofError,
   InvalidRequirementsError,
@@ -32,7 +68,7 @@ export {
   UnsupportedNetworkError,
   X402Error,
 } from "./errors.js";
-export type { Attestation } from "./attestation.js";
+export type { Attestation, AttestedContent } from "./attestation.js";
 export { restTransactionId, toTransactionInfo, transactionsById } from "./mirror.js";
 export type { MirrorTx } from "./mirror.js";
 export {

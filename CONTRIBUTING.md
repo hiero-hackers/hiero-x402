@@ -12,8 +12,25 @@ npm run verify        # THE gate suite: typecheck, lint, format, tests + coverag
 npm run provenance    # the block-proof demo — offline, runs anywhere
 ```
 
+**`npm install` 401s on the `@hiero-hackers` scope?** The packages are
+public, but GitHub Packages requires _a_ token even for public packages —
+any GitHub account's personal access token with the `read:packages` scope
+works; nothing needs granting from us:
+
+```sh
+npm config set //npm.pkg.github.com/:_authToken "<your PAT with read:packages>"
+```
+
+Can't mint a token where you're working? Open your PR as a **draft early**
+— CI runs the full verify gate on every push, so treat it as your test
+runner. Either way, please don't guess at field shapes the compiler would
+have caught: the `src/` types are browsable without installing.
+
 The live demo (`npm run facilitator` / `server` / `e2e`) needs testnet
-accounts — see [.env.example](.env.example) and the README.
+accounts — see [.env.example](.env.example) and the README. The rails are
+deliberately separate processes — the facilitator holds the fee-payer key,
+the resource server holds no payment keys, the agent holds its own;
+`npm run demo` boots the first two in one terminal.
 
 ## Ground rules
 
@@ -26,9 +43,35 @@ accounts — see [.env.example](.env.example) and the README.
   is moving in the wrong direction.
 - **Proof before data.** The stream path refuses to read a block whose proof
   fails. Keep failure closed.
-- **Amounts are strings/bigints in atomic units.** No floats, ever.
+- **Amounts are strings/bigints in atomic units.** No floats, ever. The
+  wire stays atomic; only surfaces (narration, hub inputs) convert.
 - **Keys stay in the two demo files that must hold them.** `src/` is
-  key-free and env-free by construction.
+  key-free and env-free by construction (the server's optional content
+  signer can attest to bytes, never spend).
+- **One canonical transaction-id spelling** — the REST form
+  (`0.0.x-seconds-nanos`), normalized at the wire boundary
+  (`readPaymentResponseHeader`). The SDK form appears only at SDK call
+  sites.
+- **One owner per convention** — the signed reference
+  (`commitmentReference`), the digest spelling (`isSha256Hex`), the
+  settlement header, the signature core (`verifySignatureWithKey`).
+  Extend the owner; never fork a copy — every one of these once existed
+  as two drifting copies.
+- **Parsers get fuzzed, not just exampled.** Anything reading input this
+  repo did not write — topic messages, response headers, network ids, text
+  bound for a receipt — carries property-based tests in
+  [test/fuzz.test.ts](test/fuzz.test.ts) (`npm run test:fuzz`). Add a
+  parser, add its properties: never throws on hostile input, never
+  half-understands a shape, never widens the gate.
+- **Machine facts ride typed channels.** The hub's behavior comes from
+  SSE events parsed once server-side; narration lines are display only.
+  Never regex prose for an outcome.
+- **Wording registers are part of the API.** "Verified" is reserved for
+  cryptography; mirror data is an attested record; a missing commitment
+  is `AGENT RECORD`, not a failure. Receipts, hub copy, and narration
+  must not contradict each other.
+- **Mind the hub template.** `demo/hub.ts` is one TS template literal — a
+  backtick inside any comment terminates it. (Yes, this bit us. Twice.)
 
 ## Sign your commits (DCO)
 
